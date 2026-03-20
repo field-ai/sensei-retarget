@@ -461,15 +461,24 @@ Summary:
 
 ### Phase 2 — Pinocchio + CasADi + IPOPT
 
-- Solver: `PinocchioIPOPTSolver`
-- Load G1 URDF via `pin.RobotWrapper.BuildFromURDF()`
-- Lock lower-body joints, solve for upper-body IK (same reduced-robot pattern as xr_teleoperate's `G1_29_ArmIK`)
-- CasADi `Opti` stack: cost = weighted EE pose errors + joint regularization + smoothing
-- Constraints: joint position limits
-- IPOPT solver via `cyipopt` or CasADi's built-in interface
-- Warm-start from previous frame
+**See [docs/phase2.md](phase2.md) for full detail.**
+
+Two sub-phases sharing one solver class (`PinocchioIPOPTSolver`, toggled by `collision=True/False`):
+
+**Phase 2a — Kinematic NLP**
+- Solver: `PinocchioIPOPTSolver(collision=False)`
+- Load G1 URDF, `buildReducedRobot()` — lock legs + waist (14 active arm DoF)
+- `cpin.Model` symbolic copy → CasADi `Opti` NLP
+- Cost: EE trans error (×50) + rotation log3 error (×3) + regularisation + smoothing
+- Constraints: joint position limits only
+- IPOPT with warm start (`acceptable_iter=5` for early exit)
 - Add `AccuracyMetric` (EE position error mm, orientation error deg)
-- Benchmark: FPS + accuracy vs. Phase 1
+
+**Phase 2b — Collision-Aware NLP**
+- Solver: `PinocchioIPOPTSolver(collision=True)`
+- Ground constraint: symbolic FK foot height ≥ 0 (exact, CasADi autodiff)
+- Self-collision: sphere approximations for key body pairs (wrists, elbows, torso, pelvis) — squared distance constraints, fully symbolic
+- Future: linearised FCL mesh-accurate constraints (Phase 3+)
 
 ---
 

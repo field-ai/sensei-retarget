@@ -93,8 +93,9 @@ mink, Pinocchio, and xr_teleoperate all use float64. GVHMR outputs float32 tenso
 | Phase | Doc | Key files |
 |-------|-----|-----------|
 | 0 (done) | — | `sensei/base/`, `sensei/types.py`, `sensei/robots/g1.py` |
-| 1 | [docs/phase1.md](docs/phase1.md) | `sensei/sources/gvhmr.py`, `sensei/solvers/gmr.py`, `scripts/run_pipeline.py` |
-| 2 | — | `sensei/solvers/pinocchio_ipopt.py` |
+| 1 (done) | [docs/phase1.md](docs/phase1.md) | `sensei/sources/gvhmr.py`, `sensei/solvers/gmr.py`, `scripts/run_pipeline.py` |
+| 2a | [docs/phase2.md](docs/phase2.md) | `sensei/solvers/pinocchio_ipopt.py`, `sensei/metrics/accuracy.py` |
+| 2b | [docs/phase2.md](docs/phase2.md) | same solver, `collision=True` (ground + self-collision) |
 | 3 | — | `sensei/solvers/pinocchio_alpaqa.py` |
 
 Full roadmap: [docs/plan.md](docs/plan.md).
