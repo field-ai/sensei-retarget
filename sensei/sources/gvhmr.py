@@ -58,17 +58,59 @@ class GVHMRSource(MotionSource):
 
         Runs SMPL-X FK to populate .landmarks (required by GMRSolver).
         Converts all tensors to float64 numpy.
+
+        Note: we replicate load_gvhmr_pred_file() instead of calling it directly
+        because it calls smplx.create() without num_betas, and smplx >= 0.1.28
+        defaults to num_betas=16 while GVHMR outputs only 10 betas. Passing
+        num_betas=10 explicitly avoids the shape mismatch in the FK forward pass.
         """
         # Late imports — only fail if GMR / smplx not installed
+        import torch
+        import smplx
         from general_motion_retargeting.utils.smpl import (
-            load_gvhmr_pred_file,
             get_gvhmr_data_offline_fast,
             JOINT_NAMES,
         )
 
-        smplx_data, body_model, smplx_output, human_height = load_gvhmr_pred_file(
-            path, self._smplx_folder
+        gvhmr_pred = torch.load(path, map_location="cpu", weights_only=False)
+        smpl_params = gvhmr_pred["smpl_params_global"]
+
+        betas_np = smpl_params["betas"][0].numpy()   # (10,) or (B,)
+        num_betas_in_file = betas_np.shape[0]
+
+        smplx_data = {
+            "pose_body":        smpl_params["body_pose"].numpy(),
+            "betas":            betas_np,
+            "root_orient":      smpl_params["global_orient"].numpy(),
+            "trans":            smpl_params["transl"].numpy(),
+            "mocap_frame_rate": torch.tensor(30),
+        }
+
+        # Create body model with num_betas matching what GVHMR actually outputs
+        body_model = smplx.create(
+            str(self._smplx_folder),
+            "smplx",
+            gender="neutral",
+            use_pca=False,
+            num_betas=num_betas_in_file,
         )
+
+        num_frames = smpl_params["body_pose"].shape[0]
+        smplx_output = body_model(
+            betas=torch.tensor(betas_np).float().view(1, -1),
+            global_orient=torch.tensor(smplx_data["root_orient"]).float(),
+            body_pose=torch.tensor(smplx_data["pose_body"]).float(),
+            transl=torch.tensor(smplx_data["trans"]).float(),
+            left_hand_pose=torch.zeros(num_frames, 45).float(),
+            right_hand_pose=torch.zeros(num_frames, 45).float(),
+            jaw_pose=torch.zeros(num_frames, 3).float(),
+            leye_pose=torch.zeros(num_frames, 3).float(),
+            reye_pose=torch.zeros(num_frames, 3).float(),
+            expression=torch.zeros(num_frames, 10).float(),
+            return_full_pose=True,
+        )
+
+        human_height = 1.66 + 0.1 * float(betas_np[0])
 
         frames_list, aligned_fps = get_gvhmr_data_offline_fast(
             smplx_data, body_model, smplx_output, tgt_fps=self._target_fps

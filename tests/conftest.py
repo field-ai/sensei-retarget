@@ -16,17 +16,17 @@ GVHMR_CLIPS = {
 }
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tennis_pt_path() -> str:
     return GVHMR_CLIPS["tennis"]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def all_clip_paths() -> dict[str, str]:
     return GVHMR_CLIPS
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mock_motion_sequence() -> MotionSequence:
     """Minimal MotionSequence for unit tests that don't need real data."""
     N, J = 10, 21
@@ -43,7 +43,7 @@ def mock_motion_sequence() -> MotionSequence:
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def g1_config() -> RobotConfig:
     from sensei.robots.g1 import get_g1_config
     return get_g1_config()
