@@ -1,0 +1,60 @@
+# Sensei Retarget — Conda environment
+#
+# Create:  conda env create -f environment.yml
+# Update:  conda env update -f environment.yml --prune
+# Activate: conda activate sensei
+#
+# Phase 2/3 additions (Pinocchio + CasADi + IPOPT) are commented out below.
+# Uncomment and run `conda env update` when you reach those phases.
+
+name: sensei
+
+channels:
+  - pytorch          # torch binaries
+  - conda-forge      # pinocchio, casadi, ipopt (Phase 2/3)
+  - defaults
+
+dependencies:
+  - python=3.10       # matches gvhmr env; pinocchio bindings require >=3.10
+  - pip
+
+  # ── Core (always required) ──────────────────────────────────────────────────
+  - numpy>=1.24       # float64 throughout; NOTE: GVHMR pins 1.23.5 — override ok
+  - scipy>=1.10       # rotations (scipy.spatial.transform.Rotation)
+
+  # ── PyTorch (needed only for torch.load on GVHMR .pt files, CPU-only) ──────
+  # Use cpuonly if no GPU; swap for cuda version if running GVHMR inference
+  - pytorch::pytorch>=2.0
+  - pytorch::cpuonly  # remove this line and add cudatoolkit if GPU available
+
+  # ── Phase 2/3: Pinocchio + CasADi + IPOPT (uncomment when needed) ──────────
+  # - conda-forge::pinocchio>=3.0   # FK/Jacobians; includes pinocchio.casadi module
+  # - conda-forge::casadi>=3.6      # symbolic NLP; pairs with pinocchio.casadi
+  # - conda-forge::ipopt            # interior-point NLP solver
+  # - conda-forge::cyipopt          # Python bindings for IPOPT
+
+  - pip:
+    # ── MuJoCo + mink (Phase 1 solver stack) ─────────────────────────────────
+    - mink                          # differential IK (used by GMR)
+    - mujoco                        # physics engine for mink
+    - "qpsolvers[daqp,proxqp]"     # QP backends for mink's solve_ik()
+
+    # ── SMPL-X (body model; needed by GVHMRSource) ────────────────────────────
+    - "smplx @ git+https://github.com/vchoutas/smplx"
+
+    # ── Utilities ─────────────────────────────────────────────────────────────
+    - rich
+    - tqdm
+
+    # ── Dev tools ─────────────────────────────────────────────────────────────
+    - pytest
+    - ruff
+
+    # ── Third-party repos (pip install -e) ───────────────────────────────────
+    # These live in third_party/ (gitignored). Run after `conda env create`:
+    #   pip install -e third_party/GMR
+    #   pip install -e third_party/GVHMR   # only needed for running inference
+    #   pip install -e .                    # install sensei itself
+    #
+    # alpaqa (Phase 3):
+    #   pip install -e third_party/alpaqa

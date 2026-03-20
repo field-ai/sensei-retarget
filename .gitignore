@@ -1,0 +1,44 @@
+# ── Third-party repos (pip-installed, not committed) ──────────────────────────
+# These are the repos we actually import from. Populate via setup instructions
+# in CLAUDE.md. Symlinks are used where the repo already lives at a known path
+# (e.g. /mnt/code/GMR). For new installs, clone manually and pip install -e.
+third_party/
+
+# ── Reference repos (read-only inspiration, never imported) ───────────────────
+# Clone with: make refs  (see CLAUDE.md)
+reference_repos/
+
+# ── Data (large files, not committed) ─────────────────────────────────────────
+data/
+outputs/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg-link
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
