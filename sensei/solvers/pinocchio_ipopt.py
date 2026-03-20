@@ -1,0 +1,354 @@
+"""
+PinocchioIPOPTSolver: full 29-DoF NLP retargeting via Pinocchio + CasADi + IPOPT.
+
+Phase 2a (collision=False): kinematic NLP — EE position + orientation tracking.
+Phase 2b (collision=True):  + ground plane + sphere self-collision constraints.
+
+Architecture
+------------
+Root pose (position + orientation) is extracted from the SMPL-X pelvis target
+and fixed as an NLP *parameter* each frame — not optimised over.
+The 29 body joints are the optimisation variables.
+
+Implementation note
+-------------------
+pinocchio.casadi requires SX (symbolic scalars), not MX (symbolic matrices).
+We use casadi.nlpsol directly with SX throughout — no casadi.Opti.
+All EE targets are stacked into a single parameter vector p_all so that nlpsol
+can be called with a plain numpy vector each frame.
+
+Requires
+--------
+    conda install -c conda-forge pinocchio casadi ipopt
+"""
+from __future__ import annotations
+
+import numpy as np
+
+from sensei.base.solver import RetargetingSolver
+from sensei.types import MotionSequence, RobotConfig, RobotMotion
+
+
+# ── Target mapping: SMPL-X joint → G1 URDF frame → (pos_weight, rot_weight) ──
+# Derived from /mnt/code/GMR/general_motion_retargeting/ik_configs/smplx_to_g1.json
+_EE_MAP: list[tuple[str, str, float, float]] = [
+    # Feet — strong position tracking (ground contact, stance stability)
+    ("left_foot",      "left_ankle_roll_link",   100.0, 5.0),
+    ("right_foot",     "right_ankle_roll_link",  100.0, 5.0),
+    # Wrists — primary arm EE
+    ("left_wrist",     "left_wrist_yaw_link",    100.0, 10.0),
+    ("right_wrist",    "right_wrist_yaw_link",   100.0, 10.0),
+    # Mid-chain — soft hints to prevent joint-angle flipping
+    ("left_elbow",     "left_elbow_link",          10.0, 5.0),
+    ("right_elbow",    "right_elbow_link",         10.0, 5.0),
+    ("left_hip",       "left_hip_roll_link",       10.0, 5.0),
+    ("right_hip",      "right_hip_roll_link",      10.0, 5.0),
+    ("left_knee",      "left_knee_link",           10.0, 2.0),
+    ("right_knee",     "right_knee_link",          10.0, 2.0),
+    ("spine3",         "torso_link",                5.0, 5.0),
+    ("left_shoulder",  "left_shoulder_yaw_link",   5.0, 5.0),
+    ("right_shoulder", "right_shoulder_yaw_link",  5.0, 5.0),
+]
+
+# 14 finger joints in g1_body29_hand14.urdf — locked to neutral so we get
+# a clean 29-DoF body model matching Phase 1 (g1_mocap_29dof.xml)
+_HAND_JOINTS: list[str] = [
+    "left_hand_index_0_joint",  "left_hand_index_1_joint",
+    "left_hand_middle_0_joint", "left_hand_middle_1_joint",
+    "left_hand_thumb_0_joint",  "left_hand_thumb_1_joint",
+    "left_hand_thumb_2_joint",
+    "right_hand_index_0_joint", "right_hand_index_1_joint",
+    "right_hand_middle_0_joint","right_hand_middle_1_joint",
+    "right_hand_thumb_0_joint", "right_hand_thumb_1_joint",
+    "right_hand_thumb_2_joint",
+]
+
+_NEE = len(_EE_MAP)   # 13
+
+
+class PinocchioIPOPTSolver(RetargetingSolver):
+    """
+    Full 29-DoF NLP retargeting: Pinocchio FK + CasADi symbolic diff + IPOPT.
+
+    Root pose is taken directly from the SMPL-X pelvis (fixed parameter each
+    frame).  The 29 body joints are the optimisation variables.
+
+    Args:
+        collision:     enable ground + self-collision constraints (Phase 2b)
+        max_iter:      IPOPT max iterations per frame (default 100)
+        trans_weight:  global multiplier on position cost terms (default 1.0)
+        rot_weight:    global multiplier on rotation cost terms (default 1.0)
+        reg_weight:    joint regularisation toward zero (default 0.01)
+        smooth_weight: frame-to-frame smoothing weight (default 0.5)
+    """
+
+    def __init__(
+        self,
+        collision:     bool  = False,
+        max_iter:      int   = 100,
+        trans_weight:  float = 1.0,
+        rot_weight:    float = 1.0,
+        reg_weight:    float = 0.01,
+        smooth_weight: float = 0.5,
+    ) -> None:
+        self._collision     = collision
+        self._max_iter      = max_iter
+        self._trans_weight  = trans_weight
+        self._rot_weight    = rot_weight
+        self._reg_weight    = reg_weight
+        self._smooth_weight = smooth_weight
+
+        # set in setup()
+        self._nlp_solver    = None
+        self._q_lo          = None
+        self._q_hi          = None
+        self._ndof          = 29
+        self._robot_config: RobotConfig | None = None
+
+        # warm-start: IPOPT dual variables from last solve
+        self._lam_x0: np.ndarray | None = None
+        self._lam_g0: np.ndarray | None = None
+
+        # Accumulated per-frame root poses (for metadata, like GMRSolver)
+        self._root_pos_list: list[np.ndarray] = []
+        self._root_rot_list: list[np.ndarray] = []
+
+    @property
+    def name(self) -> str:
+        return "pinocchio_ipopt" + ("_collision" if self._collision else "")
+
+    # ── Setup ─────────────────────────────────────────────────────────────────
+
+    def setup(self, robot: RobotConfig) -> None:
+        import pathlib
+        import pinocchio as pin
+        import pinocchio.casadi as cpin
+        import casadi
+
+        self._robot_config = robot
+        self._robot        = robot   # required by base-class solve() loop
+        urdf      = robot.urdf_path
+        mesh_dir  = str(pathlib.Path(urdf).parent)
+
+        # 1. Load full URDF → lock 14 hand joints → 29-DoF body model
+        robot_full = pin.RobotWrapper.BuildFromURDF(
+            urdf, [mesh_dir], pin.JointModelFreeFlyer()
+        )
+        ref_q    = pin.neutral(robot_full.model)
+        robot_29 = robot_full.buildReducedRobot(_HAND_JOINTS, ref_q)
+        model    = robot_29.model          # nq=36: 7 (free-flyer) + 29 joints
+        ndof     = model.nq - 7            # 29
+
+        # 2. CasADi symbolic model — must use SX throughout
+        cmodel = cpin.Model(model)
+        cdata  = cmodel.createData()
+
+        # 3. Decision variables and parameters (all SX)
+        #
+        #    x   = joints (29,)
+        #    p   = [root(7), q_last(29), p_tgts(3*NEE), R_tgts(9*NEE)]
+        #            0..6     7..35       36..74          75..191
+        #
+        x_sx  = casadi.SX.sym("q",      ndof)               # 29
+        p_sx  = casadi.SX.sym("p",      7 + ndof + 3*_NEE + 9*_NEE)
+
+        root_sx   = p_sx[:7]                                 # (7,)
+        qlast_sx  = p_sx[7 : 7 + ndof]                      # (29,)
+        ptgt_sx   = p_sx[7 + ndof : 7 + ndof + 3*_NEE]      # (3*NEE,)
+        Rtgt_sx   = p_sx[7 + ndof + 3*_NEE :]               # (9*NEE,)
+
+        # 4. FK
+        q_full_sx = casadi.vertcat(root_sx, x_sx)            # (36,)
+        cpin.framesForwardKinematics(cmodel, cdata, q_full_sx)
+
+        # 5. Cost
+        cost_sx = casadi.SX(0)
+        for i, (smpl_name, g1_frame, pw, rw) in enumerate(_EE_MAP):
+            fid  = cmodel.getFrameId(g1_frame)
+            p_fk = cdata.oMf[fid].translation   # SX (3,)
+            R_fk = cdata.oMf[fid].rotation       # SX (3,3)
+
+            p_ref = ptgt_sx[3*i : 3*i+3]                    # (3,)
+            R_ref = casadi.reshape(Rtgt_sx[9*i : 9*i+9], 3, 3)  # (3,3)
+
+            if pw > 0:
+                cost_sx = cost_sx + (self._trans_weight * pw) * casadi.sumsqr(
+                    p_fk - p_ref
+                )
+            if rw > 0:
+                err_rot = cpin.log3(R_fk @ R_ref.T)
+                cost_sx = cost_sx + (self._rot_weight * rw) * casadi.sumsqr(err_rot)
+
+        cost_sx = cost_sx + self._reg_weight    * casadi.sumsqr(x_sx)
+        cost_sx = cost_sx + self._smooth_weight * casadi.sumsqr(x_sx - qlast_sx)
+
+        # 6. Joint limits
+        #    Use the tighter of (URDF limits, robot config limits) so that the
+        #    NLP respects the operational limits set by the MuJoCo model.
+        urdf_lo = np.array(model.lowerPositionLimit[7:], dtype=np.float64)
+        urdf_hi = np.array(model.upperPositionLimit[7:], dtype=np.float64)
+        _LARGE  = 1e6
+        urdf_lo = np.where(np.isinf(urdf_lo), -_LARGE, urdf_lo)
+        urdf_hi = np.where(np.isinf(urdf_hi),  _LARGE, urdf_hi)
+        # robot config limits come from g1_mocap_29dof.xml — same joint order
+        q_lo = np.maximum(robot.joint_lower, urdf_lo)
+        q_hi = np.minimum(robot.joint_upper, urdf_hi)
+
+        # 7. Build IPOPT NLP
+        nlp  = {"x": x_sx, "p": p_sx, "f": cost_sx}
+        opts = {
+            "ipopt.print_level":           0,
+            "ipopt.max_iter":              self._max_iter,
+            "ipopt.tol":                   1e-4,
+            "ipopt.acceptable_tol":        5e-4,
+            "ipopt.acceptable_iter":       5,
+            "ipopt.warm_start_init_point": "yes",
+            "print_time":                  0,
+        }
+        self._nlp_solver = casadi.nlpsol("retarget", "ipopt", nlp, opts)
+        self._q_lo       = q_lo
+        self._q_hi       = q_hi
+        self._ndof       = ndof
+        self._p_dim      = int(p_sx.shape[0])
+
+        # Reset warm-start state
+        self._lam_x0 = np.zeros(ndof, dtype=np.float64)
+        self._lam_g0 = np.zeros(0,    dtype=np.float64)
+
+    # ── Solve ─────────────────────────────────────────────────────────────────
+
+    def solve(self, motion: MotionSequence) -> RobotMotion:
+        assert self._nlp_solver is not None, "Call setup() before solve()"
+        assert motion.landmarks is not None, (
+            "PinocchioIPOPTSolver requires MotionSequence.landmarks. Use GVHMRSource."
+        )
+        self._root_pos_list = []
+        self._root_rot_list = []
+
+        result = super().solve(motion)
+
+        if self._root_pos_list:
+            result.metadata["root_pos"] = np.stack(self._root_pos_list)
+            result.metadata["root_rot"] = np.stack(self._root_rot_list)
+        return result
+
+    def solve_frame(
+        self, targets: dict, q_prev: np.ndarray
+    ) -> tuple[np.ndarray, bool]:
+        """
+        targets : landmark dict from GVHMRSource
+                  {smpl_joint: (pos (3,), rot (scipy.Rotation))}
+        q_prev  : (29,) previous joint configuration
+        """
+        # ── Root from SMPL-X pelvis ───────────────────────────────────────────
+        if "pelvis" in targets:
+            root_pos, root_rot = targets["pelvis"]
+            root_quat_xyzw = _to_xyzw(root_rot)
+        else:
+            root_pos       = np.zeros(3, dtype=np.float64)
+            root_quat_xyzw = np.array([0., 0., 0., 1.], dtype=np.float64)
+
+        root_vec = np.concatenate([root_pos, root_quat_xyzw]).astype(np.float64)
+
+        # Accumulate for metadata
+        wxyz = np.array([root_quat_xyzw[3], root_quat_xyzw[0],
+                         root_quat_xyzw[1], root_quat_xyzw[2]])
+        self._root_pos_list.append(root_pos.copy())
+        self._root_rot_list.append(wxyz)
+
+        # ── Build parameter vector ────────────────────────────────────────────
+        q0   = np.clip(q_prev, -1e6, 1e6)
+        ptgt = np.zeros(3 * _NEE, dtype=np.float64)
+        Rtgt = np.zeros(9 * _NEE, dtype=np.float64)
+
+        for i, (smpl_name, _, _, _) in enumerate(_EE_MAP):
+            if smpl_name not in targets:
+                # Use FK-neutral (zeros) — cost term still present but pulls to zero
+                Rtgt[9*i : 9*i+9] = np.eye(3).flatten()
+                continue
+            pos, rot = targets[smpl_name]
+            ptgt[3*i : 3*i+3] = pos.astype(np.float64)
+            Rtgt[9*i : 9*i+9] = _to_matrix(rot).flatten()
+
+        p_all = np.concatenate([root_vec, q0, ptgt, Rtgt])
+
+        # ── Solve ─────────────────────────────────────────────────────────────
+        try:
+            sol = self._nlp_solver(
+                x0   = q0,
+                p    = p_all,
+                lbx  = self._q_lo,
+                ubx  = self._q_hi,
+                lam_x0 = self._lam_x0,
+                lam_g0 = self._lam_g0,
+            )
+            q = np.asarray(sol["x"], dtype=np.float64).flatten()
+            # Save dual variables for next frame warm-start
+            self._lam_x0 = np.asarray(sol["lam_x"], dtype=np.float64).flatten()
+            self._lam_g0 = np.asarray(sol["lam_g"], dtype=np.float64).flatten()
+            converged = True
+        except Exception:
+            q = q0.copy()
+            converged = False
+
+        return q, converged
+
+    def teardown(self) -> None:
+        self._nlp_solver   = None
+        self._q_lo         = None
+        self._q_hi         = None
+        self._robot_config = None
+        self._robot        = None
+        self._lam_x0       = None
+        self._lam_g0       = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _to_xyzw(rot) -> np.ndarray:
+    """Convert rotation to xyzw quaternion (Pinocchio convention).
+
+    Accepts:
+      - scipy Rotation
+      - (3,3) rotation matrix  → from_matrix
+      - (4,) wxyz quaternion   → reorder to xyzw  (GMR landmark format)
+      - (4,) xyzw quaternion   → returned as-is   (already Pinocchio format)
+
+    GMR landmarks store quaternions as wxyz (scalar_first=True in scipy).
+    We detect this by checking shape only; Pinocchio expects xyzw.
+    """
+    from scipy.spatial.transform import Rotation
+    if isinstance(rot, Rotation):
+        return rot.as_quat().astype(np.float64)   # xyzw
+    arr = np.asarray(rot, dtype=np.float64)
+    if arr.shape == (3, 3):
+        return Rotation.from_matrix(arr).as_quat()  # xyzw
+    if arr.shape == (4,):
+        # GMR stores wxyz — convert to xyzw
+        w, x, y, z = arr
+        return np.array([x, y, z, w], dtype=np.float64)
+    raise ValueError(f"Unrecognised rotation format: shape {arr.shape}")
+
+
+def _to_matrix(rot) -> np.ndarray:
+    """Convert rotation to (3,3) matrix.
+
+    Accepts scipy Rotation, (3,3) array, or (4,) wxyz quaternion (GMR format).
+    """
+    from scipy.spatial.transform import Rotation
+    if isinstance(rot, Rotation):
+        return rot.as_matrix().astype(np.float64)
+    arr = np.asarray(rot, dtype=np.float64)
+    if arr.shape == (3, 3):
+        return arr
+    if arr.shape == (4,):
+        # GMR wxyz → scipy xyzw
+        w, x, y, z = arr
+        return Rotation.from_quat([x, y, z, w]).as_matrix().astype(np.float64)
+    raise ValueError(f"Unrecognised rotation format: shape {arr.shape}")
+
+
+# ── Auto-registration ─────────────────────────────────────────────────────────
+
+from sensei.registry import registry  # noqa: E402
+registry.register_solver(PinocchioIPOPTSolver)

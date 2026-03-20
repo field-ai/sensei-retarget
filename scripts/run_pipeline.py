@@ -40,7 +40,11 @@ def build_solver(name: str):
     if name == "gmr":
         from sensei.solvers.gmr import GMRSolver
         return GMRSolver(verbose=False)
-    raise ValueError(f"Unknown solver '{name}'. Available: gmr")
+    if name in ("pinocchio_ipopt", "pinocchio_ipopt_collision"):
+        from sensei.solvers.pinocchio_ipopt import PinocchioIPOPTSolver
+        collision = name.endswith("_collision")
+        return PinocchioIPOPTSolver(collision=collision)
+    raise ValueError(f"Unknown solver '{name}'. Available: gmr, pinocchio_ipopt, pinocchio_ipopt_collision")
 
 
 def build_robot(name: str):

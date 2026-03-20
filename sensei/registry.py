@@ -88,6 +88,7 @@ def _auto_register() -> None:
     _modules = [
         "sensei.sources.gvhmr",
         "sensei.solvers.gmr",
+        "sensei.solvers.pinocchio_ipopt",
         "sensei.metrics.timing",
     ]
     for mod in _modules:
