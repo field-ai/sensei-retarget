@@ -110,10 +110,11 @@ def main() -> None:
     if args.output:
         out = pathlib.Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
+        N = result.num_frames
         data = {
             "fps":      result.fps,
-            "root_pos": np.zeros((result.num_frames, 3), dtype=np.float64),
-            "root_rot": np.zeros((result.num_frames, 4), dtype=np.float64),
+            "root_pos": result.metadata.get("root_pos", np.zeros((N, 3), dtype=np.float64)),
+            "root_rot": result.metadata.get("root_rot", np.tile([1.,0.,0.,0.], (N,1)).astype(np.float64)),
             "dof_pos":  result.q_array(),
             "solver":   result.solver_name,
             "robot":    result.robot_name,

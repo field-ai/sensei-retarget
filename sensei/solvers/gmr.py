@@ -73,8 +73,18 @@ class GMRSolver(RetargetingSolver):
         human_height = 1.66 + 0.1 * float(motion.betas[0])
         self._update_human_height(human_height)
 
-        # Use the base class loop (handles timing + RobotState construction)
-        return super().solve(motion)
+        # Accumulators for root pose (populated by solve_frame)
+        self._root_pos_list: list[np.ndarray] = []
+        self._root_rot_list: list[np.ndarray] = []
+
+        result = super().solve(motion)
+
+        # Attach root poses to result metadata
+        if self._root_pos_list:
+            result.metadata["root_pos"] = np.stack(self._root_pos_list)
+            result.metadata["root_rot"] = np.stack(self._root_rot_list)
+
+        return result
 
     def solve_frame(
         self,
@@ -90,8 +100,14 @@ class GMRSolver(RetargetingSolver):
             qpos = self._gmr.retarget(targets)          # (7 + DoF,) float64
             dof = self._robot.num_dof
             q = qpos[7 : 7 + dof].astype(np.float64)
+            self._root_pos_list.append(qpos[0:3].astype(np.float64))
+            self._root_rot_list.append(qpos[3:7].astype(np.float64))
             return q, True
         except Exception:
+            prev_pos = self._root_pos_list[-1] if self._root_pos_list else np.zeros(3)
+            prev_rot = self._root_rot_list[-1] if self._root_rot_list else np.array([1.,0.,0.,0.])
+            self._root_pos_list.append(prev_pos.copy())
+            self._root_rot_list.append(prev_rot.copy())
             return q_prev.copy(), False
 
     def _update_human_height(self, height: float) -> None:
