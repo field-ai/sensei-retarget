@@ -65,6 +65,43 @@ _HAND_JOINTS: list[str] = [
 
 _NEE = len(_EE_MAP)   # 13
 
+# ── GMR IK-config preprocessing tables ───────────────────────────────────────
+# Derived from smplx_to_g1.json — must match exactly what GMR applies in
+# scale_human_data() + offset_human_data() before its own IK.
+
+# Scale factors: applied to each SMPL-X joint position relative to the pelvis
+# (pelvis position itself is also scaled by its own factor).
+_SCALE: dict[str, float] = {
+    "pelvis":         0.9,
+    "spine3":         0.9,
+    "left_hip":       0.9,  "right_hip":       0.9,
+    "left_knee":      0.9,  "right_knee":      0.9,
+    "left_foot":      0.9,  "right_foot":      0.9,
+    "left_shoulder":  0.8,  "right_shoulder":  0.8,
+    "left_elbow":     0.8,  "right_elbow":     0.8,
+    "left_wrist":     0.8,  "right_wrist":     0.8,
+}
+
+# Rotation offsets (wxyz, scalar-first): right-multiply the raw SMPL-X
+# orientation to obtain the target orientation in the robot's frame.
+# Identity = [1,0,0,0]; keyed by the SMPL-X joint name used in _EE_MAP.
+_ROT_OFFSET_WXYZ: dict[str, list[float]] = {
+    "left_foot":      [ 0.5,        -0.5,        -0.5,        -0.5       ],
+    "right_foot":     [ 0.5,        -0.5,        -0.5,        -0.5       ],
+    "left_wrist":     [ 1.0,         0.0,         0.0,         0.0       ],  # identity
+    "right_wrist":    [ 0.0,         0.0,         0.0,        -1.0       ],  # 180° Z
+    "left_elbow":     [ 1.0,         0.0,         0.0,         0.0       ],  # identity
+    "right_elbow":    [ 0.0,         0.0,         0.0,        -1.0       ],  # 180° Z
+    "left_hip":       [ 0.42677550, -0.56379311, -0.56379311, -0.42677550],
+    "right_hip":      [ 0.42677550, -0.56379311, -0.56379311, -0.42677550],
+    "left_knee":      [ 0.5,        -0.5,        -0.5,        -0.5       ],
+    "right_knee":     [ 0.5,        -0.5,        -0.5,        -0.5       ],
+    "spine3":         [ 0.5,        -0.5,        -0.5,        -0.5       ],
+    "left_shoulder":  [ 0.70710678,  0.0,        -0.70710678,  0.0       ],
+    "right_shoulder": [ 0.0,         0.70710678,  0.0,         0.70710678],
+}
+_PELVIS_ROT_OFFSET_WXYZ: list[float] = [0.5, -0.5, -0.5, -0.5]
+
 
 class PinocchioIPOPTSolver(RetargetingSolver):
     """
@@ -240,35 +277,61 @@ class PinocchioIPOPTSolver(RetargetingSolver):
                   {smpl_joint: (pos (3,), rot (scipy.Rotation))}
         q_prev  : (29,) previous joint configuration
         """
-        # ── Root from SMPL-X pelvis ───────────────────────────────────────────
+        # ── Root from SMPL-X pelvis — with GMR frame corrections ─────────────
+        #
+        # GMR applies two preprocessing steps to SMPL-X landmarks before IK:
+        #   1. scale_human_data : pelvis_pos *= 0.9; other joints scaled relative
+        #   2. offset_human_data: orientation right-multiplied by rot_offset (wxyz)
+        # We replicate the same transformations so our NLP targets match GMR's.
+        from scipy.spatial.transform import Rotation as _R
+
         if "pelvis" in targets:
-            root_pos, root_rot = targets["pelvis"]
-            root_quat_xyzw = _to_xyzw(root_rot)
+            raw_pelvis_pos, raw_pelvis_rot = targets["pelvis"]
+            raw_pelvis_pos = raw_pelvis_pos.astype(np.float64)
+            # 1. Scale root position
+            root_pos = _SCALE["pelvis"] * raw_pelvis_pos
+            # 2. Apply rotation offset to pelvis orientation
+            rot_p = _R.from_quat(_to_xyzw(raw_pelvis_rot))
+            w, x, y, z = _PELVIS_ROT_OFFSET_WXYZ
+            rot_p = rot_p * _R.from_quat([x, y, z, w])
+            root_quat_xyzw = rot_p.as_quat().astype(np.float64)
         else:
+            raw_pelvis_pos = np.zeros(3, dtype=np.float64)
             root_pos       = np.zeros(3, dtype=np.float64)
             root_quat_xyzw = np.array([0., 0., 0., 1.], dtype=np.float64)
 
         root_vec = np.concatenate([root_pos, root_quat_xyzw]).astype(np.float64)
 
-        # Accumulate for metadata
+        # Accumulate for metadata (wxyz for MuJoCo renderer)
         wxyz = np.array([root_quat_xyzw[3], root_quat_xyzw[0],
                          root_quat_xyzw[1], root_quat_xyzw[2]])
         self._root_pos_list.append(root_pos.copy())
         self._root_rot_list.append(wxyz)
 
-        # ── Build parameter vector ────────────────────────────────────────────
+        # ── Build EE parameter vector (positions scaled, orientations offset) ─
         q0   = np.clip(q_prev, -1e6, 1e6)
         ptgt = np.zeros(3 * _NEE, dtype=np.float64)
         Rtgt = np.zeros(9 * _NEE, dtype=np.float64)
 
         for i, (smpl_name, _, _, _) in enumerate(_EE_MAP):
             if smpl_name not in targets:
-                # Use FK-neutral (zeros) — cost term still present but pulls to zero
                 Rtgt[9*i : 9*i+9] = np.eye(3).flatten()
                 continue
-            pos, rot = targets[smpl_name]
-            ptgt[3*i : 3*i+3] = pos.astype(np.float64)
-            Rtgt[9*i : 9*i+9] = _to_matrix(rot).flatten()
+            raw_pos, raw_rot = targets[smpl_name]
+            raw_pos = raw_pos.astype(np.float64)
+
+            # Scale position relative to pelvis (GMR: human_scale_table)
+            scale = _SCALE.get(smpl_name, 1.0)
+            pos = (raw_pos - raw_pelvis_pos) * scale + root_pos
+
+            # Apply rotation offset (GMR: offset_human_data)
+            rot = _R.from_quat(_to_xyzw(raw_rot))
+            off = _ROT_OFFSET_WXYZ.get(smpl_name, [1., 0., 0., 0.])
+            w, x, y, z = off
+            rot = rot * _R.from_quat([x, y, z, w])
+
+            ptgt[3*i : 3*i+3] = pos
+            Rtgt[9*i : 9*i+9] = rot.as_matrix().flatten()
 
         p_all = np.concatenate([root_vec, q0, ptgt, Rtgt])
 
