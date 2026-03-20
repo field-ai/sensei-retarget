@@ -3,9 +3,16 @@
 Generate a three-panel visualization video from a GVHMR .pt file.
 
 Panels (left → right):
-  1. Original input video
-  2. SMPL-X body skeleton
-  3. Unitree G1 retargeted motion (MuJoCo)
+  1. Original input video (0_input_video.mp4 from the same directory)
+  2. SMPL-X body — MuJoCo offscreen render, GMR camera, GVHMR checkerboard floor
+  3. Unitree G1 retargeted — MuJoCo offscreen render, GMR exact camera settings
+
+Rendering pipeline is kept identical to GMR + GVHMR:
+  - Camera: azimuth=180, elevation=-10
+  - G1 distance: 2.0 m  (VIEWER_CAM_DISTANCE_DICT['unitree_g1'])
+  - SMPL distance: 2.5 m  (slightly more to fit full body)
+  - Floor: GVHMR-style checker rgb1=.80 .90 .90 / rgb2=.60 .70 .70
+  - Video output: imageio.get_writer (same as GVHMR)
 
 Usage:
     python scripts/make_video.py \\
@@ -22,7 +29,7 @@ Usage:
 from __future__ import annotations
 
 import os
-# Must be set before mujoco (or any package that imports mujoco) is imported.
+# Must be set before mujoco (or any package that imports mujoco) is first imported
 os.environ.setdefault("MUJOCO_GL", "egl")
 
 import argparse
@@ -31,6 +38,7 @@ import sys
 import time
 
 import cv2
+import imageio
 import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -42,7 +50,7 @@ PANEL_W = 640
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def read_video_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
-    """Read up to n_frames from a video file, pad with last frame if shorter."""
+    """Read up to n_frames from a video, pad with last frame if shorter."""
     cap = cv2.VideoCapture(video_path)
     frames: list[np.ndarray] = []
     while len(frames) < n_frames:
@@ -53,7 +61,6 @@ def read_video_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
         frame = cv2.resize(frame, (PANEL_W, PANEL_H))
         frames.append(frame)
     cap.release()
-    # Pad with last frame if video is shorter than motion
     filler = frames[-1].copy() if frames else np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)
     while len(frames) < n_frames:
         frames.append(filler.copy())
@@ -61,6 +68,7 @@ def read_video_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
 
 
 def add_label(img: np.ndarray, text: str) -> np.ndarray:
+    """Stamp a white label with black outline in the top-left corner."""
     out = img.copy()
     cv2.putText(out, text, (12, 34),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0),    4, cv2.LINE_AA)
@@ -69,42 +77,21 @@ def add_label(img: np.ndarray, text: str) -> np.ndarray:
     return out
 
 
-def write_video(
-    path: pathlib.Path,
-    frame_rows: list[np.ndarray],
-    fps: float,
-) -> None:
-    h, w = frame_rows[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
-    for frame in frame_rows:
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Produce a three-panel retargeting video.")
-    parser.add_argument("--input",  required=True,
-                        help="Path to GVHMR hmr4d_results.pt")
-    parser.add_argument("--output", required=True,
-                        help="Output video file (.mp4)")
+        description="Three-panel retargeting video: input | SMPL body | G1 robot")
+    parser.add_argument("--input",  required=True,  help="Path to GVHMR hmr4d_results.pt")
+    parser.add_argument("--output", required=True,  help="Output video (.mp4)")
     parser.add_argument("--fps",    type=float, default=30.0)
-    parser.add_argument("--azimuth",   type=float, default=135.0,
-                        help="G1 camera azimuth in degrees (default 135)")
-    parser.add_argument("--elevation", type=float, default=-12.0,
-                        help="G1 camera elevation in degrees (default -12)")
-    parser.add_argument("--distance",  type=float, default=3.5,
-                        help="G1 camera distance in metres (default 3.5)")
     args = parser.parse_args()
 
     pt_path  = pathlib.Path(args.input)
     out_path = pathlib.Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    total_t0 = time.perf_counter()
+    t_total = time.perf_counter()
 
     # ── 1. Load SMPL motion ───────────────────────────────────────────────────
     print("[make_video] loading SMPL motion …")
@@ -124,8 +111,8 @@ def main() -> None:
     t0 = time.perf_counter()
     result = solver.solve(motion)
     solver.teardown()
-    print(f"  {result.num_frames} frames solved in {time.perf_counter()-t0:.2f}s  "
-          f"({result.num_frames/(time.perf_counter()-t0):.0f} fps)")
+    elapsed = time.perf_counter() - t0
+    print(f"  {result.num_frames} frames in {elapsed:.2f}s  ({result.num_frames/elapsed:.0f} fps)")
 
     root_pos = result.metadata.get("root_pos", np.zeros((N, 3), dtype=np.float64))
     root_rot = result.metadata.get(
@@ -139,45 +126,42 @@ def main() -> None:
     video_path = pt_path.parent / "0_input_video.mp4"
     if video_path.exists():
         orig_frames = read_video_frames(str(video_path), N)
-        print(f"  read {len(orig_frames)} frames from {video_path.name}")
+        print(f"  {len(orig_frames)} frames from {video_path.name}")
     else:
-        print(f"  [warn] {video_path} not found — using blank panel")
+        print(f"  [warn] {video_path} not found — blank panel")
         orig_frames = [np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)] * N
 
-    # ── 4. Panel 2 — SMPL skeleton ────────────────────────────────────────────
-    print("[make_video] rendering SMPL skeleton …")
+    # ── 4. Panel 2 — SMPL skeleton (MuJoCo, GMR+GVHMR style) ─────────────────
+    print("[make_video] rendering SMPL body (MuJoCo) …")
     t0 = time.perf_counter()
-    from sensei.visualizers.smpl_skeleton import render_smpl_frames
-    smpl_frames = render_smpl_frames(motion.landmarks, height=PANEL_H, width=PANEL_W)
+    from sensei.visualizers.smpl_mujoco import render_smpl_frames
+    smpl_frames = render_smpl_frames(
+        motion.landmarks, height=PANEL_H, width=PANEL_W
+    )
     print(f"  {len(smpl_frames)} frames in {time.perf_counter()-t0:.2f}s")
 
-    # ── 5. Panel 3 — G1 MuJoCo ───────────────────────────────────────────────
-    print("[make_video] rendering G1 robot (MuJoCo) …")
+    # ── 5. Panel 3 — G1 robot (MuJoCo, GMR camera) ───────────────────────────
+    print("[make_video] rendering G1 robot (MuJoCo, GMR camera) …")
     t0 = time.perf_counter()
     from sensei.visualizers.mujoco_render import render_g1_frames
     g1_frames = render_g1_frames(
-        robot.mjcf_path,
-        root_pos, root_rot, dof_pos,
+        robot.mjcf_path, root_pos, root_rot, dof_pos,
         height=PANEL_H, width=PANEL_W,
-        azimuth=args.azimuth,
-        elevation=args.elevation,
-        distance=args.distance,
     )
     print(f"  {len(g1_frames)} frames in {time.perf_counter()-t0:.2f}s")
 
-    # ── 6. Compose and write ──────────────────────────────────────────────────
-    print(f"[make_video] composing and writing {out_path} …")
-    rows: list[np.ndarray] = []
+    # ── 6. Compose and write (imageio — same as GVHMR) ───────────────────────
+    print(f"[make_video] writing {out_path} …")
+    writer = imageio.get_writer(str(out_path), fps=args.fps, macro_block_size=1)
     for f1, f2, f3 in zip(orig_frames, smpl_frames, g1_frames):
         f1 = add_label(f1, "Input video")
         f2 = add_label(f2, "SMPL-X body")
         f3 = add_label(f3, "G1 retargeted")
-        rows.append(np.concatenate([f1, f2, f3], axis=1))
+        writer.append_data(np.concatenate([f1, f2, f3], axis=1))
+    writer.close()
 
-    write_video(out_path, rows, fps=args.fps)
-
-    total_s = time.perf_counter() - total_t0
     size_mb = out_path.stat().st_size / 1e6
+    total_s = time.perf_counter() - t_total
     print(f"\n[make_video] done  →  {out_path}")
     print(f"  {N} frames @ {args.fps:.0f} fps  |  {size_mb:.1f} MB  |  {total_s:.1f}s total")
 

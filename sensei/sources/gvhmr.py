@@ -16,7 +16,11 @@ import numpy as np
 from sensei.base.source import MotionSource
 from sensei.types import MotionSequence
 
-_DEFAULT_SMPLX_FOLDER = pathlib.Path("/mnt/code/GMR/assets/body_models")
+_REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
+_DEFAULT_SMPLX_FOLDER = _REPO_ROOT / "assets" / "body_models"
+# Fallback to GMR's copy if the repo-local one hasn't been set up yet
+if not (_DEFAULT_SMPLX_FOLDER / "smplx" / "SMPLX_NEUTRAL.npz").exists():
+    _DEFAULT_SMPLX_FOLDER = pathlib.Path("/mnt/code/GMR/assets/body_models")
 _DEFAULT_TARGET_FPS = 30
 
 

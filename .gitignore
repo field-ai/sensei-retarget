@@ -12,6 +12,11 @@ reference_repos/
 data/
 outputs/
 
+# ── Body models (large proprietary weights, not committed) ────────────────────
+# Copy with: cp /mnt/code/GMR/assets/body_models/smplx/SMPLX_NEUTRAL.npz assets/body_models/smplx/
+# Or obtain from https://smpl-x.is.tue.mpg.de
+assets/body_models/
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
