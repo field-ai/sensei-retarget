@@ -18,9 +18,9 @@ setup(
             "smplx @ git+https://github.com/vchoutas/smplx",
             "torch",
         ],
-        # Phase 3: alpaqa PANOC solver
-        # Install via: pip install -e third_party/alpaqa
-        "alpaqa": [],
+        # Phase 3: OpEn (Optimization Engine) PANOC solver
+        # Install via: pip install opengen  (requires Rust toolchain)
+        "open": ["opengen"],
         # Dev
         "dev": [
             "pytest",

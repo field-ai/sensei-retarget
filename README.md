@@ -24,11 +24,11 @@ video  →  GVHMR  →  SMPL-X landmarks  →  [solver]  →  G1 joint angles  �
 |--------|-----------|-------------|-----|--------|
 | `gmr` | GMR / mink differential QP | ~4 ms | ~250 | ✅ Phase 1 |
 | `pinocchio_ipopt` | Pinocchio + CasADi + IPOPT NLP | ~18 ms | ~50 | ✅ Phase 2a |
-| `pinocchio_alpaqa` | Pinocchio + alpaqa PANOC | — | — | planned Phase 3 |
+| `pinocchio_open` | Pinocchio + OpEn (PANOC, compiled Rust) | — | — | planned Phase 3 |
 
 > **Phase 2a note — local minima.**
 > `pinocchio_ipopt` solves the full NLP each frame independently (warm-started from the previous frame). Unlike `gmr`'s differential QP, which penalises large joint-angle changes by construction and naturally path-follows, IPOPT can converge to a different local minimum — especially in unconstrained yaw joints (`waist_yaw`, `left_shoulder_yaw`). The divergence is ~1.5–1.9 rad on those joints. The robot tracks the correct end-effector positions but the arm/torso posture differs from GMR.
-> Planned fix in Phase 3: switch to PANOC (alpaqa), which supports warm-starting from a local tangent and has better basin-of-attraction properties.
+> Planned fix in Phase 3: switch to [OpEn](https://alphaville.github.io/optimization-engine/) (PANOC, compiled Rust). OpEn uses `opengen` to define the NLP symbolically in CasADi, then generates a pre-compiled Rust solver called at runtime — expected sub-ms solve times.
 
 ---
 
@@ -167,7 +167,7 @@ See the [local minima note](#solvers) above for posture divergence.
 | 1 | GVHMR source + GMR solver | ✅ done |
 | 2a | Pinocchio + CasADi + IPOPT | ✅ done |
 | 2b | Phase 2a + collision avoidance | in progress |
-| 3 | Pinocchio + alpaqa PANOC | planned |
+| 3 | Pinocchio + OpEn PANOC (compiled Rust) | planned |
 | 4 | Full metrics suite + leaderboard | planned |
 
 Full detail: [docs/plan.md](docs/plan.md).

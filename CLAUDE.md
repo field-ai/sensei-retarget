@@ -33,11 +33,14 @@ conda install -c conda-forge pinocchio casadi ipopt
 
 Why conda for pinocchio: the `pinocchio.casadi` symbolic sub-module requires the C++ build from conda-forge. `pip install pin` works but the CasADi bridge is unreliable.
 
-### Phase 3 additions (alpaqa)
+### Phase 3 additions (OpEn)
 
 ```bash
-pip install -e third_party/alpaqa
+# Requires Rust toolchain — install from https://rustup.rs
+pip install opengen
 ```
+
+Why OpEn: `opengen` takes a CasADi symbolic NLP (reused from Phase 2) and generates a pre-compiled Rust solver. At runtime the solver is called via a local TCP socket — expected sub-ms solve times vs IPOPT's ~18 ms.
 
 ### GPU note
 
@@ -100,7 +103,7 @@ mink, Pinocchio, and xr_teleoperate all use float64. GVHMR outputs float32 tenso
 | 1 (done) | [docs/phase1.md](docs/phase1.md) | `sensei/sources/gvhmr.py`, `sensei/solvers/gmr.py`, `scripts/run_pipeline.py` |
 | 2a | [docs/phase2.md](docs/phase2.md) | `sensei/solvers/pinocchio_ipopt.py`, `sensei/metrics/accuracy.py` |
 | 2b | [docs/phase2.md](docs/phase2.md) | same solver, `collision=True` (ground + self-collision) |
-| 3 | — | `sensei/solvers/pinocchio_alpaqa.py` |
+| 3 | [docs/phase3.md](docs/phase3.md) | `sensei/solvers/pinocchio_open.py` |
 
 Full roadmap: [docs/plan.md](docs/plan.md).
 

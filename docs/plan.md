@@ -74,10 +74,11 @@ conda env update -f environment.yml --prune
 
 Why conda for these: `pinocchio >= 3.0` requires C++ build tools and the `pinocchio.casadi` symbolic sub-module, which the conda-forge binary bundles correctly. `pip install pin` works but the casadi bridge is unreliable.
 
-### Phase 3 — add alpaqa
+### Phase 3 — add OpEn
 
 ```bash
-pip install -e third_party/alpaqa
+# Requires Rust toolchain (https://rustup.rs)
+pip install opengen
 ```
 
 ### GPU vs CPU note
@@ -103,7 +104,7 @@ pip install -e third_party/alpaqa
 |------|-----------|--------------|---------|
 | GMR | `third_party/GMR` → `/mnt/code/GMR` | symlink (exists at `/mnt/code/GMR`) | `GVHMRSource`, `GMRSolver` |
 | GVHMR | `third_party/GVHMR` → `/mnt/code/GVHMR` | symlink (exists at `/mnt/code/GVHMR`) | `GVHMRSource` |
-| alpaqa | `third_party/alpaqa` | cloned; `pip install -e third_party/alpaqa` | `PinocchioAlpaqaSolver` (Phase 3) |
+| opengen | pip package | `pip install opengen` (+ Rust toolchain) | `PinocchioOpEnSolver` (Phase 3) |
 
 New third-party deps are added here as needed. Pinocchio and CasADi are system/conda packages, not cloned.
 
@@ -135,7 +136,7 @@ scipy >= 1.10        # rotations, spatial transforms
 |-------|-----------|---------------|-------|
 | `[gmr]` | mink, mujoco, qpsolvers[daqp,proxqp], smplx, torch | pip | Phase 1 |
 | `[pinocchio]` | pinocchio >= 3.0, casadi >= 3.6 | **conda-forge** preferred | Phase 2/3 |
-| `[alpaqa]` | alpaqa >= 1.0 | `pip install -e third_party/alpaqa` | Phase 3 |
+| `[open]` | opengen | `pip install opengen` | Phase 3 |
 | `[ipopt]` | cyipopt | conda-forge | Phase 2 |
 
 ### Install notes
@@ -143,7 +144,7 @@ scipy >= 1.10        # rotations, spatial transforms
 - **IPOPT**: `conda install -c conda-forge ipopt cyipopt`
 - **GMR**: `pip install -e third_party/GMR` (installs mink, mujoco, smplx as transitive deps)
 - **GVHMR**: `pip install -e third_party/GVHMR` (requires CUDA only for running inference; loading `.pt` files is CPU-only)
-- **alpaqa**: `pip install -e third_party/alpaqa`
+- **OpEn**: `pip install opengen` (Rust toolchain required — `curl https://sh.rustup.rs -sSf | sh`)
 
 ### Solver isolation rule
 Each solver file imports its dependencies **inside the class**, not at module top-level:
@@ -197,7 +198,7 @@ sensei-humanoid-retarget/
 │   │   ├── __init__.py
 │   │   ├── gmr.py                   # GMR + mink (Phase 1)
 │   │   ├── pinocchio_ipopt.py       # Pinocchio + CasADi + IPOPT (Phase 2)
-│   │   └── pinocchio_alpaqa.py      # Pinocchio + alpaqa PANOC (Phase 3)
+│   │   └── pinocchio_open.py        # Pinocchio + OpEn PANOC (Phase 3)
 │   │
 │   ├── metrics/
 │   │   ├── __init__.py
@@ -227,7 +228,7 @@ sensei-humanoid-retarget/
 │   ├── solvers/
 │   │   ├── gmr.yaml
 │   │   ├── pinocchio_ipopt.yaml
-│   │   └── pinocchio_alpaqa.yaml
+│   │   └── pinocchio_open.yaml
 │   └── robots/
 │       └── g1.yaml
 │
@@ -245,7 +246,7 @@ sensei-humanoid-retarget/
 ├── third_party/                     # Repos we import from — gitignored, not pushed
 │   ├── GMR -> /mnt/code/GMR         # symlink — pip install -e third_party/GMR
 │   ├── GVHMR -> /mnt/code/GVHMR    # symlink — pip install -e third_party/GVHMR
-│   └── alpaqa/                      # cloned — pip install -e third_party/alpaqa
+│   └── (opengen is a pip package, not cloned)
 │
 ├── reference_repos/                 # Read-only inspiration — gitignored, not pushed
 │   ├── mink/
@@ -482,13 +483,16 @@ Two sub-phases sharing one solver class (`PinocchioIPOPTSolver`, toggled by `col
 
 ---
 
-### Phase 3 — alpaqa PANOC Solver
+### Phase 3 — OpEn (Optimization Engine) PANOC Solver
 
-- Solver: `PinocchioAlpaqaSolver`
-- Reuse Phase 2 Pinocchio model + CasADi symbolic expressions
-- Swap IPOPT for `alpaqa.ALMSolver` + `alpaqa.PANOCSolver`
-- alpaqa is first-order (no matrix factorizations) → expected faster for medium-scale NLPs
-- Benchmark: FPS, accuracy, smoothness vs. Phase 1 and 2
+**See [docs/phase3.md](phase3.md) for full detail.**
+
+- Solver: `PinocchioOpEnSolver`
+- Reuse Phase 2 Pinocchio model + CasADi symbolic expressions for cost/constraints
+- `opengen` takes the CasADi NLP and **generates a compiled Rust solver** (offline, at `setup()`)
+- At runtime, call the pre-compiled solver via local TCP socket → expected sub-ms solve times
+- PANOC (proximal averaged Newton-type) + Augmented Lagrangian for constraints — no matrix factorizations
+- Benchmark: FPS, accuracy, smoothness vs. Phase 1 (GMR) and Phase 2 (IPOPT)
 
 ---
 
@@ -528,7 +532,7 @@ Full suite:
 |------|-----------|------|
 | GMR | `third_party/GMR` | Phase 1 solver (mink IK); also SMPL-X utilities |
 | GVHMR | `third_party/GVHMR` | Upstream: video → SMPL-X `.pt` files |
-| alpaqa | `third_party/alpaqa` | Phase 3 PANOC/ALM optimizer |
+| opengen | pip package | Phase 3 OpEn PANOC code generator |
 
 ### Reference repos (read-only, `reference_repos/`)
 
