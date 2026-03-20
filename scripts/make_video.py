@@ -3,16 +3,16 @@
 Generate a three-panel visualization video from a GVHMR .pt file.
 
 Panels (left → right):
-  1. Original input video (0_input_video.mp4 from the same directory)
-  2. SMPL-X body — MuJoCo offscreen render, GMR camera, GVHMR checkerboard floor
-  3. Unitree G1 retargeted — MuJoCo offscreen render, GMR exact camera settings
+  1. Original input video  (0_input_video.mp4 from the same directory)
+  2. SMPL body mesh        (GVHMR pre-rendered 2_global.mp4 → 1_incam.mp4 → MuJoCo fallback)
+  3. Unitree G1 retargeted (MuJoCo offscreen, GMR exact camera: az=180 el=-10 d=2.0)
 
-Rendering pipeline is kept identical to GMR + GVHMR:
-  - Camera: azimuth=180, elevation=-10
-  - G1 distance: 2.0 m  (VIEWER_CAM_DISTANCE_DICT['unitree_g1'])
-  - SMPL distance: 2.5 m  (slightly more to fit full body)
-  - Floor: GVHMR-style checker rgb1=.80 .90 .90 / rgb2=.60 .70 .70
-  - Video output: imageio.get_writer (same as GVHMR)
+SMPL panel priority:
+  1. {clip_dir}/2_global.mp4  — GVHMR global mesh render (best quality)
+  2. {clip_dir}/1_incam.mp4   — GVHMR in-camera mesh render
+  3. MuJoCo stick figure       — fallback when GVHMR renders are not present
+
+Video output: imageio.get_writer (same as GVHMR)
 
 Usage:
     python scripts/make_video.py \\
@@ -131,14 +131,22 @@ def main() -> None:
         print(f"  [warn] {video_path} not found — blank panel")
         orig_frames = [np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)] * N
 
-    # ── 4. Panel 2 — SMPL skeleton (MuJoCo, GMR+GVHMR style) ─────────────────
-    print("[make_video] rendering SMPL body (MuJoCo) …")
-    t0 = time.perf_counter()
-    from sensei.visualizers.smpl_mujoco import render_smpl_frames
-    smpl_frames = render_smpl_frames(
-        motion.landmarks, height=PANEL_H, width=PANEL_W
-    )
-    print(f"  {len(smpl_frames)} frames in {time.perf_counter()-t0:.2f}s")
+    # ── 4. Panel 2 — SMPL body (GVHMR pre-render preferred, MuJoCo fallback) ──
+    smpl_frames: list[np.ndarray] = []
+    for candidate in ("2_global.mp4", "1_incam.mp4"):
+        candidate_path = pt_path.parent / candidate
+        if candidate_path.exists():
+            print(f"[make_video] SMPL panel: reading {candidate_path.name} (GVHMR render) …")
+            smpl_frames = read_video_frames(str(candidate_path), N)
+            print(f"  {len(smpl_frames)} frames")
+            break
+
+    if not smpl_frames:
+        print("[make_video] SMPL panel: no GVHMR render found — using MuJoCo stick figure …")
+        t0 = time.perf_counter()
+        from sensei.visualizers.smpl_mujoco import render_smpl_frames
+        smpl_frames = render_smpl_frames(motion.landmarks, height=PANEL_H, width=PANEL_W)
+        print(f"  {len(smpl_frames)} frames in {time.perf_counter()-t0:.2f}s")
 
     # ── 5. Panel 3 — G1 robot (MuJoCo, GMR camera) ───────────────────────────
     print("[make_video] rendering G1 robot (MuJoCo, GMR camera) …")
