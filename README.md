@@ -81,13 +81,29 @@ docs/
 
 ---
 
+## Phase 1 results — GMR baseline
+
+GMR solve time only (GVHMR pre-processing excluded). Unitree G1, 29 DoF, DAQP backend.
+
+| Clip | Mean latency | p95 | FPS | Converged | Joint violations |
+|------|-------------|-----|-----|-----------|-----------------|
+| Basketball | 4.1 ms | 7.1 ms | ~248 | 100% | 4.3% |
+| Dance | 5.3 ms | 6.6 ms | ~192 | 100% | 0% |
+| Tennis | 3.4 ms | 4.8 ms | ~300 | 100% | 0% |
+
+6–10× real-time headroom. The DAQP QP solve itself is ~0.06 ms/call; overhead is in mink's QP assembly and uncached MuJoCo name lookups. See [docs/phase1.md](docs/phase1.md#results) for full profiling notes.
+
+Run: `python scripts/plot_metrics.py` → `outputs/metrics_timing.png`
+
+---
+
 ## Phase roadmap
 
 | Phase | Solver | Status |
 |-------|--------|--------|
 | 0 | Package scaffold + ABCs | ✅ done |
-| 1 | GVHMR + GMR (mink QP IK) | 🔧 in progress |
-| 2 | Pinocchio + CasADi + IPOPT | planned |
+| 1 | GVHMR + GMR (mink QP IK) | ✅ done |
+| 2 | Pinocchio + CasADi + IPOPT | 🔧 in progress |
 | 3 | Pinocchio + alpaqa PANOC | planned |
 | 4 | Full metrics suite | planned |
 

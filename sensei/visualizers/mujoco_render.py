@@ -44,7 +44,31 @@ def render_g1_frames(
     -------
     list of (H, W, 3) uint8 RGB frames
     """
-    model    = mujoco.MjModel.from_xml_path(mjcf_path)
+    # Inject offscreen framebuffer size before creating the model so that
+    # MuJoCo allocates a buffer large enough for height × width renders.
+    # We write a patched copy alongside the original so relative mesh paths resolve.
+    import xml.etree.ElementTree as ET
+    import tempfile
+    mjcf_dir = os.path.dirname(os.path.abspath(mjcf_path))
+    tree = ET.parse(mjcf_path)
+    root_el = tree.getroot()
+    vis_el = root_el.find("visual")
+    if vis_el is None:
+        vis_el = ET.SubElement(root_el, "visual")
+    glob_el = vis_el.find("global")
+    if glob_el is None:
+        glob_el = ET.SubElement(vis_el, "global")
+    glob_el.set("offheight", str(max(height, int(glob_el.get("offheight", "0")))))
+    glob_el.set("offwidth",  str(max(width,  int(glob_el.get("offwidth",  "0")))))
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".xml", dir=mjcf_dir, delete=False
+    ) as tmp:
+        tree.write(tmp.name)
+        tmp_path = tmp.name
+    try:
+        model = mujoco.MjModel.from_xml_path(tmp_path)
+    finally:
+        os.unlink(tmp_path)
     data     = mujoco.MjData(model)
     renderer = mujoco.Renderer(model, height=height, width=width)
 

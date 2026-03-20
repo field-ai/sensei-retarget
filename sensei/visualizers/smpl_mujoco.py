@@ -53,6 +53,7 @@ def _rgba(name: str) -> np.ndarray:
 _SCENE_XML = """\
 <mujoco model="smpl_vis">
   <visual>
+    <global offheight="1024" offwidth="1024"/>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
   </visual>

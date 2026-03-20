@@ -7,12 +7,16 @@ Panels (left → right):
   2. SMPL body mesh        (GVHMR pre-rendered 2_global.mp4 → 1_incam.mp4 → MuJoCo fallback)
   3. Unitree G1 retargeted (MuJoCo offscreen, GMR exact camera: az=180 el=-10 d=2.0)
 
+Layout:
+  • Three 640×640 square panels separated by 4 px dark dividers
+  • 40 px info bar at the bottom (clip name + frame counter)
+  • Letterboxing (not stretching) preserves source aspect ratios
+  • Dark charcoal background (#121212) fills letterbox margins
+
 SMPL panel priority:
   1. {clip_dir}/2_global.mp4  — GVHMR global mesh render (best quality)
   2. {clip_dir}/1_incam.mp4   — GVHMR in-camera mesh render
   3. MuJoCo stick figure       — fallback when GVHMR renders are not present
-
-Video output: imageio.get_writer (same as GVHMR)
 
 Usage:
     python scripts/make_video.py \\
@@ -43,14 +47,38 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-PANEL_H = 480
-PANEL_W = 640
+# ── Layout constants ──────────────────────────────────────────────────────────
+PANEL_SZ  = 640          # each panel is PANEL_SZ × PANEL_SZ (square)
+SEP_W     = 4            # width of the divider strip between panels
+BAR_H     = 40           # bottom info bar height
+_BG       = (18, 18, 18) # letterbox / divider background colour (RGB)
+
+# Label colours (RGB) — one per panel
+_LABEL_COLOR = {
+    "Input video":   (110, 185, 255),   # cool blue
+    "SMPL-X body":   (200, 145, 255),   # lilac
+    "G1 retargeted": ( 85, 220, 145),   # mint green
+}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def letterbox(img: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Resize preserving aspect ratio; pad to exactly h × w with _BG."""
+    src_h, src_w = img.shape[:2]
+    scale = min(w / src_w, h / src_h)
+    nw = int(src_w * scale)
+    nh = int(src_h * scale)
+    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    canvas = np.full((h, w, 3), _BG, dtype=np.uint8)
+    y0 = (h - nh) // 2
+    x0 = (w - nw) // 2
+    canvas[y0:y0+nh, x0:x0+nw] = resized
+    return canvas
+
+
 def read_video_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
-    """Read up to n_frames from a video, pad with last frame if shorter."""
+    """Read up to n_frames, letterbox each to PANEL_SZ × PANEL_SZ."""
     cap = cv2.VideoCapture(video_path)
     frames: list[np.ndarray] = []
     while len(frames) < n_frames:
@@ -58,23 +86,61 @@ def read_video_frames(video_path: str, n_frames: int) -> list[np.ndarray]:
         if not ret:
             break
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, (PANEL_W, PANEL_H))
+        frame = letterbox(frame, PANEL_SZ, PANEL_SZ)
         frames.append(frame)
     cap.release()
-    filler = frames[-1].copy() if frames else np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)
+    filler = (frames[-1].copy() if frames
+              else np.full((PANEL_SZ, PANEL_SZ, 3), _BG, dtype=np.uint8))
     while len(frames) < n_frames:
         frames.append(filler.copy())
     return frames[:n_frames]
 
 
 def add_label(img: np.ndarray, text: str) -> np.ndarray:
-    """Stamp a white label with black outline in the top-left corner."""
+    """Coloured label with semi-transparent dark background box."""
     out = img.copy()
-    cv2.putText(out, text, (12, 34),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0),    4, cv2.LINE_AA)
-    cv2.putText(out, text, (12, 34),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA)
+    font  = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.72
+    thick = 2
+    pad   = 9
+    color = _LABEL_COLOR.get(text, (255, 255, 255))
+
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    x1, y1 = 10, 10
+    x2, y2 = x1 + tw + 2 * pad, y1 + th + 2 * pad
+
+    # Semi-transparent black backing
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.58, out, 0.42, 0, out)
+
+    cv2.putText(out, text, (x1 + pad, y2 - pad // 2),
+                font, scale, color, thick, cv2.LINE_AA)
     return out
+
+
+def make_info_bar(text: str, w: int) -> np.ndarray:
+    """A slim dark bar spanning the full output width with centred text."""
+    bar = np.full((BAR_H, w, 3), (12, 12, 12), dtype=np.uint8)
+    font   = cv2.FONT_HERSHEY_SIMPLEX
+    scale  = 0.55
+    thick  = 1
+    color  = (160, 160, 160)
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    tx = (w - tw) // 2
+    ty = (BAR_H + th) // 2
+    cv2.putText(bar, text, (tx, ty), font, scale, color, thick, cv2.LINE_AA)
+    return bar
+
+
+def compose_frame(f1: np.ndarray, f2: np.ndarray, f3: np.ndarray,
+                  bar_text: str) -> np.ndarray:
+    """Stack three panels with separators and attach the info bar."""
+    sep = np.full((PANEL_SZ, SEP_W, 3), _BG, dtype=np.uint8)
+    row = np.concatenate([f1, sep, f2, sep, f3], axis=1)
+    total_w = row.shape[1]
+    bar = make_info_bar(bar_text, total_w)
+    return np.concatenate([row, bar], axis=0)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -90,6 +156,7 @@ def main() -> None:
     pt_path  = pathlib.Path(args.input)
     out_path = pathlib.Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    clip_name = pt_path.parent.name
 
     t_total = time.perf_counter()
 
@@ -129,7 +196,7 @@ def main() -> None:
         print(f"  {len(orig_frames)} frames from {video_path.name}")
     else:
         print(f"  [warn] {video_path} not found — blank panel")
-        orig_frames = [np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)] * N
+        orig_frames = [np.full((PANEL_SZ, PANEL_SZ, 3), _BG, dtype=np.uint8)] * N
 
     # ── 4. Panel 2 — SMPL body (GVHMR pre-render preferred, MuJoCo fallback) ──
     smpl_frames: list[np.ndarray] = []
@@ -145,7 +212,8 @@ def main() -> None:
         print("[make_video] SMPL panel: no GVHMR render found — using MuJoCo stick figure …")
         t0 = time.perf_counter()
         from sensei.visualizers.smpl_mujoco import render_smpl_frames
-        smpl_frames = render_smpl_frames(motion.landmarks, height=PANEL_H, width=PANEL_W)
+        smpl_frames = render_smpl_frames(
+            motion.landmarks, height=PANEL_SZ, width=PANEL_SZ)
         print(f"  {len(smpl_frames)} frames in {time.perf_counter()-t0:.2f}s")
 
     # ── 5. Panel 3 — G1 robot (MuJoCo, GMR camera) ───────────────────────────
@@ -154,18 +222,19 @@ def main() -> None:
     from sensei.visualizers.mujoco_render import render_g1_frames
     g1_frames = render_g1_frames(
         robot.mjcf_path, root_pos, root_rot, dof_pos,
-        height=PANEL_H, width=PANEL_W,
+        height=PANEL_SZ, width=PANEL_SZ,
     )
     print(f"  {len(g1_frames)} frames in {time.perf_counter()-t0:.2f}s")
 
-    # ── 6. Compose and write (imageio — same as GVHMR) ───────────────────────
+    # ── 6. Compose and write ──────────────────────────────────────────────────
     print(f"[make_video] writing {out_path} …")
     writer = imageio.get_writer(str(out_path), fps=args.fps, macro_block_size=1)
-    for f1, f2, f3 in zip(orig_frames, smpl_frames, g1_frames):
+    for idx, (f1, f2, f3) in enumerate(zip(orig_frames, smpl_frames, g1_frames)):
         f1 = add_label(f1, "Input video")
         f2 = add_label(f2, "SMPL-X body")
         f3 = add_label(f3, "G1 retargeted")
-        writer.append_data(np.concatenate([f1, f2, f3], axis=1))
+        bar_text = f"{clip_name}   frame {idx+1:04d}/{N:04d}   GMR · Unitree G1"
+        writer.append_data(compose_frame(f1, f2, f3, bar_text))
     writer.close()
 
     size_mb = out_path.stat().st_size / 1e6
