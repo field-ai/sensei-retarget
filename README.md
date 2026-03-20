@@ -1,10 +1,25 @@
 # sensei-retarget
 
-Modular platform for developing and benchmarking humanoid motion retargeting pipelines.
+**Modular benchmark platform for humanoid motion retargeting.**
+Takes video-inferred human motion and retargets it to the Unitree G1 (29-DoF) using swappable IK solvers, all measured against the same metrics.
 
-**Target robot**: Unitree G1 (29-DoF)
-**Upstream sources**: GVHMR video inference, SMPL-X mocap, BVH (planned)
-**Solvers**: GMR/mink (Phase 1), Pinocchio+CasADi+IPOPT (Phase 2), alpaqa PANOC (Phase 3)
+```
+video  →  GVHMR  →  SMPL-X landmarks  →  [solver]  →  G1 joint angles  →  metrics
+```
+
+---
+
+## Solvers
+
+| Solver | Algorithm | Mean latency | FPS | Status |
+|--------|-----------|-------------|-----|--------|
+| `gmr` | GMR / mink differential QP | ~4 ms | ~250 | ✅ Phase 1 |
+| `pinocchio_ipopt` | Pinocchio + CasADi + IPOPT NLP | ~18 ms | ~50 | ✅ Phase 2a |
+| `pinocchio_alpaqa` | Pinocchio + alpaqa PANOC | — | — | planned Phase 3 |
+
+> **Phase 2a note — local minima.**
+> `pinocchio_ipopt` solves the full NLP each frame independently (warm-started from the previous frame). Unlike `gmr`'s differential QP, which penalises large joint-angle changes by construction and naturally path-follows, IPOPT can converge to a different local minimum — especially in unconstrained yaw joints (`waist_yaw`, `left_shoulder_yaw`). The divergence is ~1.5–1.9 rad on those joints. The robot tracks the correct end-effector positions but the arm/torso posture differs from GMR.
+> Planned fix in Phase 3: switch to PANOC (alpaqa), which supports warm-starting from a local tangent and has better basin-of-attraction properties.
 
 ---
 
@@ -15,75 +30,99 @@ Modular platform for developing and benchmarking humanoid motion retargeting pip
 conda env create -f environment.yml
 conda activate sensei
 
-# 2. Install third-party libraries we import from
-pip install -e third_party/GMR      # GMR + mink + mujoco + smplx
+# 2. Install third-party libraries
+pip install -e third_party/GMR           # GMR + mink + mujoco + smplx
+pip install -e third_party/GVHMR         # optional — GVHMR inference only
 
-# 3. Install sensei
+# 3. Phase 2 additions (Pinocchio + CasADi + IPOPT)
+conda install -c conda-forge pinocchio casadi ipopt
+
+# 4. Install sensei itself
 pip install -e .
 
-# 4. Run the Phase 1 baseline on a pre-processed clip
+# 5. Run a retargeting pipeline
 python scripts/run_pipeline.py \
     --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \
     --source gvhmr --solver gmr --robot g1
 
-# 5. Run tests (no solver deps required)
-pytest tests/test_base/
+python scripts/run_pipeline.py \
+    --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \
+    --source gvhmr --solver pinocchio_ipopt --robot g1
+
+# 6. Side-by-side metrics comparison (all clips, all solvers)
+python scripts/plot_metrics.py           # → outputs/metrics_timing.png
+
+# 7. Render a MuJoCo video
+python scripts/make_video.py \
+    --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \
+    --solver gmr
+
+# 8. Run tests
+pytest tests/test_base/                  # no solver deps required
+pytest tests/                            # full suite — needs sensei env
 ```
 
 ---
 
 ## Architecture
 
-```
-upstream source  →  MotionSequence  →  solver  →  RobotMotion  →  metrics
- (GVHMRSource)                       (GMRSolver)              (SolverTimingMetric)
-```
-
 Three abstract base classes define the contracts:
 
-| ABC | File | What it produces |
-|-----|------|-----------------|
-| `MotionSource` | `sensei/base/source.py` | `MotionSequence` from a file |
-| `RetargetingSolver` | `sensei/base/solver.py` | `RobotMotion` from a `MotionSequence` |
-| `Metric` | `sensei/base/metric.py` | `MetricResult` from source + result |
+| ABC | File | Contract |
+|-----|------|---------|
+| `MotionSource` | `sensei/base/source.py` | Load a file → `MotionSequence` |
+| `RetargetingSolver` | `sensei/base/solver.py` | `MotionSequence` → `RobotMotion` |
+| `Metric` | `sensei/base/metric.py` | Source + result → `MetricResult` |
 
-All arrays are `float64` numpy. Solver dependencies are late-imported so missing a solver's deps doesn't break other solvers.
+Key invariants:
+- **All arrays are `float64` numpy.** GVHMR emits `float32` tensors; `GVHMRSource` converts at load time.
+- **Solver deps are late-imported** (inside `setup()`). Missing a solver's deps doesn't break other solvers or the test suite.
+- **`test_abc_compliance.py` must always pass** without any solver deps installed.
+
+Lifecycle every solver must follow: `setup(robot)` → `solve(motion)` → `teardown()`.
 
 ---
 
 ## Repository layout
 
 ```
-sensei/             Main package
-  base/             ABCs (the stable contract layer)
-  types.py          Shared data types (MotionSequence, RobotMotion, …)
-  sources/          Upstream data adapters
-  solvers/          Retargeting/IK solvers (one file each)
-  metrics/          Evaluation metrics
-  robots/           Robot configurations (G1, …)
-  registry.py       Auto-discovery of sources/solvers/metrics
+sensei/
+  base/           ABCs — the stable contract layer
+  types.py        Shared data types (MotionSequence, RobotMotion, …)
+  sources/        Upstream data adapters (GVHMRSource, …)
+  solvers/        IK solvers, one file each
+    gmr.py          Phase 1 — GMR / mink differential QP
+    pinocchio_ipopt.py  Phase 2a — Pinocchio + CasADi + IPOPT NLP
+  metrics/        Evaluation metrics
+  robots/         Robot configs (G1, …)
+  registry.py     Auto-discovery of sources / solvers / metrics
 
-scripts/            CLI entry points
-tests/              Unit + integration tests
+scripts/
+  run_pipeline.py   Main CLI entry point
+  plot_metrics.py   Side-by-side solver comparison chart
+  make_video.py     MuJoCo render → mp4
 
-third_party/        Repos we import from — gitignored, not pushed
-  GMR/              → /mnt/code/GMR (symlink)
-  GVHMR/            → /mnt/code/GVHMR (symlink)
-  alpaqa/           Phase 3 optimizer
-
-reference_repos/    Read-only inspiration — gitignored, not pushed
-  mink/ G1Pilot/ xr_teleoperate/ pinocchio-casadi-examples/ …
+tests/
+  test_base/      ABC compliance tests (no solver deps)
+  test_solvers/   Solver integration tests
 
 docs/
-  plan.md           Master plan and phase roadmap
-  phase1.md         Detailed Phase 1 build guide
+  plan.md         Master plan and phase roadmap
+  phase1.md       Phase 1 detailed build notes
+  phase2.md       Phase 2 detailed build notes
+
+third_party/      Repos imported at runtime — gitignored
+  GMR/            → /mnt/code/GMR
+  GVHMR/          → /mnt/code/GVHMR (optional)
+
+reference_repos/  Read-only source material — gitignored
 ```
 
 ---
 
 ## Phase 1 results — GMR baseline
 
-GMR solve time only (GVHMR pre-processing excluded). Unitree G1, 29 DoF, DAQP backend.
+Solve time only (GVHMR pre-processing excluded). Unitree G1, 29 DoF, DAQP backend.
 
 | Clip | Mean latency | p95 | FPS | Converged | Joint violations |
 |------|-------------|-----|-----|-----------|-----------------|
@@ -91,9 +130,23 @@ GMR solve time only (GVHMR pre-processing excluded). Unitree G1, 29 DoF, DAQP ba
 | Dance | 5.3 ms | 6.6 ms | ~192 | 100% | 0% |
 | Tennis | 3.4 ms | 4.8 ms | ~300 | 100% | 0% |
 
-6–10× real-time headroom. The DAQP QP solve itself is ~0.06 ms/call; overhead is in mink's QP assembly and uncached MuJoCo name lookups. See [docs/phase1.md](docs/phase1.md#results) for full profiling notes.
+6–10× real-time headroom. The DAQP QP solve itself is ~0.06 ms/call; overhead is in mink's QP assembly and uncached MuJoCo name lookups.
 
-Run: `python scripts/plot_metrics.py` → `outputs/metrics_timing.png`
+---
+
+## Phase 2a results — Pinocchio + IPOPT
+
+Full 29-DoF NLP, warm-started per frame. Unitree G1, 29 DoF, IPOPT backend.
+
+| Clip | Mean latency | p95 | FPS | Converged | Joint violations |
+|------|-------------|-----|-----|-----------|-----------------|
+| Basketball | ~18 ms | — | ~50 | 100% | 0% |
+| Dance | ~20 ms | — | ~50 | 100% | 0% |
+| Tennis | ~17 ms | — | ~52 | 100% | 0% |
+
+IPOPT respects URDF joint limits exactly (box constraints in the NLP). The 0% violation rate vs GMR's occasional violations is because GMR uses softer limit handling in the QP.
+
+See the [local minima note](#solvers) above for posture divergence.
 
 ---
 
@@ -102,22 +155,36 @@ Run: `python scripts/plot_metrics.py` → `outputs/metrics_timing.png`
 | Phase | Solver | Status |
 |-------|--------|--------|
 | 0 | Package scaffold + ABCs | ✅ done |
-| 1 | GVHMR + GMR (mink QP IK) | ✅ done |
-| 2 | Pinocchio + CasADi + IPOPT | 🔧 in progress |
+| 1 | GVHMR source + GMR solver | ✅ done |
+| 2a | Pinocchio + CasADi + IPOPT | ✅ done |
+| 2b | Phase 2a + collision avoidance | in progress |
 | 3 | Pinocchio + alpaqa PANOC | planned |
-| 4 | Full metrics suite | planned |
+| 4 | Full metrics suite + leaderboard | planned |
 
-See [docs/plan.md](docs/plan.md) for full detail.
+Full detail: [docs/plan.md](docs/plan.md).
 
 ---
 
 ## Adding a new solver
 
 1. Create `sensei/solvers/<name>.py`, subclass `RetargetingSolver`
-2. Import solver deps inside `setup()` (not at module top-level)
-3. Register: `registry.register_solver(MySolver)` at module level
-4. Add `configs/solvers/<name>.yaml`
-5. Add test in `tests/test_solvers/`
-6. Run `pytest tests/test_base/test_abc_compliance.py`
+2. Late-import heavy deps inside `setup()`, not at module top-level
+3. Register: `registry.register_solver(MySolver)` at the bottom of the file
+4. Add the module path to `_auto_register()` in `sensei/registry.py`
+5. Add a test in `tests/test_solvers/`
+6. Verify `pytest tests/test_base/test_abc_compliance.py` still passes
 
 See [AGENTS.md](AGENTS.md) for the step-by-step agent workflow.
+
+---
+
+## Common pitfalls
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `ModuleNotFoundError: general_motion_retargeting` | GMR not installed | `pip install -e third_party/GMR` |
+| `ModuleNotFoundError: pinocchio` | Pinocchio not installed | `conda install -c conda-forge pinocchio casadi ipopt` |
+| `import pinocchio.casadi` fails | pip-installed pin lacks CasADi bridge | Reinstall via conda-forge |
+| `AssertionError: Call setup() before solve()` | Lifecycle violated | Always call `setup(robot)` first |
+| `IPOPT: Infeasible_Problem_Detected` | Bad warm-start or limits too tight | Increase `max_iter`; check q_prev within limits |
+| `ValueError: Solver 'daqp' is not available` | DAQP QP backend missing | `pip install qpsolvers[daqp]` |
