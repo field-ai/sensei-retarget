@@ -14,8 +14,8 @@ video  →  GVHMR  →  SMPL-X landmarks  →  [solver]  →  G1 joint angles  �
 > **GMR solver** · Unitree G1 29-DoF · clip: `0_input_video` · 30 fps
 > Left: SMPL-X body model (source)   Right: Unitree G1 retargeted output
 
-<video src="outputs/0_input_video_vis.mp4" width="964" controls loop muted>
-  <a href="outputs/0_input_video_vis.mp4">outputs/0_input_video_vis.mp4</a>
+<video src="docs/assets/demo_gmr_unitree_g1.mp4" width="964" controls loop muted>
+  <a href="docs/assets/demo_gmr_unitree_g1.mp4">docs/assets/demo_gmr_unitree_g1.mp4</a>
 </video>
 
 ---

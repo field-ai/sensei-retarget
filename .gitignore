@@ -10,8 +10,7 @@ reference_repos/
 
 # ── Data (large files, not committed) ─────────────────────────────────────────
 data/
-outputs/*
-!outputs/0_input_video_vis.mp4
+outputs/
 
 # ── Body models (large proprietary weights, not committed) ────────────────────
 # Copy with: cp /mnt/code/GMR/assets/body_models/smplx/SMPLX_NEUTRAL.npz assets/body_models/smplx/
