@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="sensei-retarget",
+    name="sensei-humanoid-retarget",
     version="0.1.0",
     packages=find_packages(),
     python_requires=">=3.10",
@@ -29,6 +29,6 @@ setup(
     },
     author="",
     description="Modular humanoid motion retargeting pipeline platform",
-    url="https://github.com/jay-fai/sensei-retarget",
+    url="https://github.com/jay-fai/sensei-humanoid-retarget",
     license="MIT",
 )

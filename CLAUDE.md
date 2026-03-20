@@ -6,7 +6,7 @@ This file tells Claude Code (and human developers) how to build and work in this
 
 ## What this repo does
 
-`sensei-retarget` is a modular benchmark platform for humanoid motion retargeting pipelines. It takes upstream human motion data (video, mocap) and retargets it to the Unitree G1 robot using swappable IK solvers. Each solver can be benchmarked against the same metrics.
+`sensei-humanoid-retarget` is a modular benchmark platform for humanoid motion retargeting pipelines. It takes upstream human motion data (video, mocap) and retargets it to the Unitree G1 robot using swappable IK solvers. Each solver can be benchmarked against the same metrics.
 
 ---
 

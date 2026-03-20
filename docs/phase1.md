@@ -28,7 +28,7 @@
 pip install -e /mnt/code/GMR
 
 # Install sensei itself (editable)
-pip install -e /mnt/code/sensei-retarget
+pip install -e /mnt/code/sensei-humanoid-retarget
 
 # Verify
 python -c "from general_motion_retargeting import GeneralMotionRetargeting; print('GMR ok')"
@@ -149,7 +149,7 @@ requires = ["setuptools >= 61"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "sensei-retarget"
+name = "sensei-humanoid-retarget"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -680,7 +680,7 @@ URDF path for Phase 2+ (Pinocchio) must be set separately.
 
 Joint names and limits from:
   /mnt/code/GMR/assets/unitree_g1/g1_mocap_29dof.xml
-  /mnt/code/sensei-retarget/reference_repos/xr_teleoperate/teleop/robot_control/robot_arm_ik.py
+  /mnt/code/sensei-humanoid-retarget/reference_repos/xr_teleoperate/teleop/robot_control/robot_arm_ik.py
 """
 import pathlib
 import numpy as np

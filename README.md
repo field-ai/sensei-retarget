@@ -1,4 +1,4 @@
-# sensei-retarget
+# sensei-humanoid-retarget
 
 **Modular benchmark platform for humanoid motion retargeting.**
 Takes video-inferred human motion and retargets it to the Unitree G1 (29-DoF) using swappable IK solvers, all measured against the same metrics.

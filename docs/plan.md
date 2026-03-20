@@ -163,7 +163,7 @@ class PinocchioIPOPTSolver(RetargetingSolver):
 ## Repository Architecture
 
 ```
-sensei-retarget/
+sensei-humanoid-retarget/
 ├── CLAUDE.md                        # Human developer guide
 ├── AGENTS.md                        # Agent navigation guide
 ├── README.md                        # Project overview + quickstart
