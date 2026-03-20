@@ -93,33 +93,11 @@ MotionSequence
 
 ## Phase 2a — Kinematic NLP
 
-### Joint Reduction
+### Full Robot IK
 
-The G1 has 29 DoF. For upper-body IK (wrist targets from SMPL-X), we lock the lower body so IPOPT only optimises the arm joints.
+We solve IK for all 29 DoF simultaneously — legs, waist, and arms together. This lets the optimiser trade off between upper- and lower-body joint angles to best satisfy all EE targets at once, and makes the ground-collision constraints in Phase 2b meaningful (they act on the actual leg configuration).
 
-Joints to lock (follow xr_teleoperate's `G1_29_ArmIK` pattern):
-
-```python
-JOINTS_TO_LOCK = [
-    # Legs (12)
-    "left_hip_pitch_joint",  "left_hip_roll_joint",  "left_hip_yaw_joint",
-    "left_knee_joint",       "left_ankle_pitch_joint","left_ankle_roll_joint",
-    "right_hip_pitch_joint", "right_hip_roll_joint",  "right_hip_yaw_joint",
-    "right_knee_joint",      "right_ankle_pitch_joint","right_ankle_roll_joint",
-    # Waist (3) — lock to neutral; can unlock in Phase 2b if needed
-    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
-]
-# Result: 29 - 15 = 14 active DoF (both arms: 7L + 7R)
-```
-
-```python
-reduced = robot.buildReducedRobot(
-    list_of_joints_to_lock=JOINTS_TO_LOCK,
-    reference_configuration=np.zeros(robot.model.nq),
-)
-```
-
-> **Why not lock hands?** The G1 MJCF used in Phase 1 has 29 DoF with no separate hand joints. The URDF at `reference_repos/xr_teleoperate/assets/g1/g1_body29_hand14.urdf` includes 14 hand DoF — if using that URDF, lock all hand joints too.
+No `buildReducedRobot()` — the full Pinocchio model is used directly.
 
 ### CasADi OCP Structure
 
@@ -388,12 +366,11 @@ class PinocchioIPOPTSolver(RetargetingSolver):
         import pinocchio.casadi as cpin
         import casadi
 
-        # 1. Build reduced robot (lock legs + waist)
-        # 2. Add EE frames (left_wrist, right_wrist)
-        # 3. Build CasADi symbolic model
-        # 4. Compile FK, error, cost functions
-        # 5. Build Opti problem (variables, parameters, cost, constraints)
-        # 6. If collision: add ground + self-collision constraints
+        # 1. Load full 29-DoF G1 URDF (no joint reduction)
+        # 2. Build CasADi symbolic model (cpin.Model)
+        # 3. Compile FK function for all EE frames
+        # 4. Build Opti problem (variables, parameters, cost, constraints)
+        # 5. If collision: add ground + self-collision constraints
         ...
 
     def solve_frame(self, targets: dict, q_prev: np.ndarray) -> tuple[np.ndarray, bool]:
@@ -445,8 +422,21 @@ class AccuracyMetric(Metric):
 - [ ] `pytest tests/test_base/test_abc_compliance.py` — passes (GMR must still pass too)
 - [ ] Runs on all three test clips without crashing
 - [ ] Convergence rate ≥ 80% (IPOPT may fail harder poses)
-- [ ] `AccuracyMetric`: EE position error < 50 mm mean on Tennis clip
-- [ ] Timing benchmark added to `outputs/metrics_timing.png`
+- [ ] `AccuracyMetric`: EE position error computed and logged for all clips
+- [ ] Timing benchmark updated: GMR vs 2a side-by-side in `outputs/metrics_timing.png`
+
+### GMR vs 2a Comparison
+
+`scripts/plot_metrics.py` is extended to run both solvers and produce a side-by-side panel:
+
+| Metric | GMR (Phase 1) | 2a target |
+|--------|--------------|-----------|
+| Mean latency | 3–5 ms | < 100 ms (offline) |
+| Convergence | 100% | ≥ 80% |
+| EE position error | not tracked | baseline established |
+| Joint violations | 0–4% | 0% (hard constraint) |
+
+IPOPT is expected to be slower than GMR's QP — the goal of 2a is correctness and establishing accuracy numbers, not matching GMR's speed. Speed optimisation comes in Phase 3 (alpaqa).
 
 ### Phase 2b
 

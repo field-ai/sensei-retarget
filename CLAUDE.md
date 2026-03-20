@@ -25,16 +25,19 @@ pip install -e third_party/GVHMR   # optional — only needed to run GVHMR infer
 pip install -e .
 ```
 
-### Phase 2/3 additions (when you reach those phases)
-
-Uncomment the pinocchio/casadi/ipopt lines in `environment.yml`, then:
+### Phase 2 additions (Pinocchio + CasADi + IPOPT)
 
 ```bash
-conda env update -f environment.yml --prune
-pip install -e third_party/alpaqa
+conda install -c conda-forge pinocchio casadi ipopt
 ```
 
 Why conda for pinocchio: the `pinocchio.casadi` symbolic sub-module requires the C++ build from conda-forge. `pip install pin` works but the CasADi bridge is unreliable.
+
+### Phase 3 additions (alpaqa)
+
+```bash
+pip install -e third_party/alpaqa
+```
 
 ### GPU note
 
@@ -45,22 +48,23 @@ Why conda for pinocchio: the `pinocchio.casadi` symbolic sub-module requires the
 ## Run commands
 
 ```bash
-# Run Phase 1 pipeline on a single clip
+# Run Phase 1 pipeline — GMR solver
 python scripts/run_pipeline.py \
     --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \
     --source gvhmr --solver gmr --robot g1
 
-# Run all four test clips
-for clip in tennis basketball_clip dance_clip 0_input_video; do
-    python scripts/run_pipeline.py \
-        --input /mnt/code/GVHMR/outputs/demo/${clip}/hmr4d_results.pt \
-        --output outputs/${clip}_g1_gmr.pkl
-done
+# Run Phase 2a — Pinocchio + IPOPT (full 29-DoF)
+python scripts/run_pipeline.py \
+    --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \
+    --source gvhmr --solver pinocchio_ipopt --robot g1
+
+# Timing + accuracy metrics (GMR vs Phase 2a side-by-side)
+python scripts/plot_metrics.py
 
 # Run tests (ABC compliance — no solver deps needed)
 pytest tests/test_base/
 
-# Run all tests (requires sensei conda env + GMR installed)
+# Run all tests (requires sensei conda env + GMR + pinocchio installed)
 pytest tests/
 
 # Lint
@@ -125,6 +129,9 @@ G1 URDF:           reference_repos/xr_teleoperate/assets/g1/g1_body29_hand14.urd
 | `AssertionError: Call setup() before solve()` | `solver.setup(robot)` not called | Always call `setup()` before `solve()` |
 | `AssertionError: GMRSolver requires .landmarks` | Source didn't run SMPL-X FK | Use `GVHMRSource`, not a bare `MotionSequence` |
 | Body pose shape mismatch after FPS alignment | N from FPS alignment ≠ N_orig | Always use `len(frames_list)` as N, not `smplx_data['pose_body'].shape[0]` |
+| `ModuleNotFoundError: pinocchio` | Pinocchio not installed | `conda install -c conda-forge pinocchio casadi ipopt` |
+| `import pinocchio.casadi` fails | pip-installed pin, not conda | Reinstall via conda-forge — pip build lacks the CasADi bridge |
+| IPOPT `Infeasible_Problem_Detected` | NLP is infeasible (joint limits too tight, or bad warm-start) | Check q_prev is within limits; increase `max_iter` |
 
 ---
 

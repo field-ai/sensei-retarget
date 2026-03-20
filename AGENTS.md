@@ -7,9 +7,10 @@ This file tells AI agents how to navigate, extend, and test this repo autonomous
 ## Read this first
 
 1. **[docs/plan.md](docs/plan.md)** — overall architecture, phase roadmap, design decisions
-2. **[docs/phase1.md](docs/phase1.md)** — current phase: detailed build guide with code
-3. **[CLAUDE.md](CLAUDE.md)** — environment setup, run commands, failure modes
-4. **[sensei/types.py](sensei/types.py)** — all shared data types; understand these before touching anything else
+2. **[docs/phase1.md](docs/phase1.md)** — Phase 1 (done): GMR baseline, benchmark results
+3. **[docs/phase2.md](docs/phase2.md)** — Phase 2 (active): Pinocchio + CasADi + IPOPT, collision-aware NLP
+4. **[CLAUDE.md](CLAUDE.md)** — environment setup, run commands, failure modes
+5. **[sensei/types.py](sensei/types.py)** — all shared data types; understand these before touching anything else
 
 ---
 
@@ -29,9 +30,11 @@ sensei/sources/         One file per upstream data format
 
 sensei/solvers/         One file per solver — each fully self-contained
   gmr.py                GMR + mink differential IK (Phase 1 baseline)
+  pinocchio_ipopt.py    Pinocchio + CasADi + IPOPT, full 29-DoF (Phase 2)
 
 sensei/metrics/         One file per metric
   timing.py             FPS + latency percentiles (reads frame_times_s from metadata)
+  accuracy.py           EE position + orientation error vs. SMPL-X targets (Phase 2)
 
 sensei/robots/
   g1.py                 get_g1_config() → RobotConfig (joint limits from g1_mocap_29dof.xml)
@@ -47,7 +50,8 @@ tests/
 
 docs/
   plan.md               Master plan
-  phase1.md             Phase 1 detailed build guide
+  phase1.md             Phase 1 detailed build guide (done — results included)
+  phase2.md             Phase 2 design: full-robot NLP, collision constraints, GMR comparison
 
 third_party/            Repos we import from — gitignored
   GMR/                  pip install -e third_party/GMR
