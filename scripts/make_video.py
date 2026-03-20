@@ -5,11 +5,11 @@ Generate a three-panel visualization video from a GVHMR .pt file.
 Panels (left → right):
   1. Original input video  (0_input_video.mp4 from the same directory)
   2. SMPL body mesh        (GVHMR pre-rendered 2_global.mp4 → 1_incam.mp4 → MuJoCo fallback)
-  3. Unitree G1 retargeted (MuJoCo offscreen, GMR exact camera: az=180 el=-10 d=2.0)
+  3. Unitree G1 retargeted (MuJoCo offscreen)
 
 Layout:
   • Three 640×640 square panels separated by 4 px dark dividers
-  • 40 px info bar at the bottom (clip name + frame counter)
+  • 40 px info bar at the bottom (clip name + frame counter + solver name)
   • Letterboxing (not stretching) preserves source aspect ratios
   • Dark charcoal background (#121212) fills letterbox margins
 
@@ -21,13 +21,17 @@ SMPL panel priority:
 Usage:
     python scripts/make_video.py \\
         --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \\
-        --output outputs/tennis_vis.mp4
+        --output outputs/tennis_vis.mp4 --solver gmr
 
-    # All four clips
-    for clip in tennis basketball_clip dance_clip 0_input_video; do
+    python scripts/make_video.py \\
+        --input /mnt/code/GVHMR/outputs/demo/tennis/hmr4d_results.pt \\
+        --output outputs/tennis_pinocchio.mp4 --solver pinocchio_ipopt
+
+    # All clips with a given solver
+    for clip in basketball_clip dance_clip 0_input_video; do
         python scripts/make_video.py \\
             --input /mnt/code/GVHMR/outputs/demo/${clip}/hmr4d_results.pt \\
-            --output outputs/${clip}_vis.mp4
+            --output outputs/${clip}_pinocchio.mp4 --solver pinocchio_ipopt
     done
 """
 from __future__ import annotations
@@ -145,11 +149,29 @@ def compose_frame(f1: np.ndarray, f2: np.ndarray, f3: np.ndarray,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _build_solver(name: str):
+    if name == "gmr":
+        from sensei.solvers.gmr import GMRSolver
+        return GMRSolver(verbose=False)
+    if name == "pinocchio_ipopt":
+        from sensei.solvers.pinocchio_ipopt import PinocchioIPOPTSolver
+        return PinocchioIPOPTSolver()
+    raise ValueError(f"Unknown solver '{name}'. Available: gmr, pinocchio_ipopt")
+
+
+_SOLVER_DISPLAY = {
+    "gmr":             "GMR · mink QP",
+    "pinocchio_ipopt": "Pinocchio + IPOPT",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Three-panel retargeting video: input | SMPL body | G1 robot")
     parser.add_argument("--input",  required=True,  help="Path to GVHMR hmr4d_results.pt")
     parser.add_argument("--output", required=True,  help="Output video (.mp4)")
+    parser.add_argument("--solver", default="gmr",
+                        help="Solver to use: gmr (default) or pinocchio_ipopt")
     parser.add_argument("--fps",    type=float, default=30.0)
     args = parser.parse_args()
 
@@ -168,12 +190,12 @@ def main() -> None:
     print(f"  {N} frames @ {motion.fps:.0f} fps")
 
     # ── 2. Solve IK → G1 poses ────────────────────────────────────────────────
-    print("[make_video] solving IK (GMR → G1) …")
-    from sensei.solvers.gmr import GMRSolver
+    solver_display = _SOLVER_DISPLAY.get(args.solver, args.solver)
+    print(f"[make_video] solving IK ({solver_display} → G1) …")
     from sensei.robots.g1 import get_g1_config
 
     robot  = get_g1_config()
-    solver = GMRSolver(verbose=False)
+    solver = _build_solver(args.solver)
     solver.setup(robot)
     t0 = time.perf_counter()
     result = solver.solve(motion)
@@ -233,7 +255,7 @@ def main() -> None:
         f1 = add_label(f1, "Input video")
         f2 = add_label(f2, "SMPL-X body")
         f3 = add_label(f3, "G1 retargeted")
-        bar_text = f"{clip_name}   frame {idx+1:04d}/{N:04d}   GMR · Unitree G1"
+        bar_text = f"{clip_name}   frame {idx+1:04d}/{N:04d}   {solver_display} · Unitree G1"
         writer.append_data(compose_frame(f1, f2, f3, bar_text))
     writer.close()
 
