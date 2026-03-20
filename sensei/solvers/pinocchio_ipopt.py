@@ -30,24 +30,35 @@ from sensei.types import MotionSequence, RobotConfig, RobotMotion
 
 
 # ── Target mapping: SMPL-X joint → G1 URDF frame → (pos_weight, rot_weight) ──
-# Derived from /mnt/code/GMR/general_motion_retargeting/ik_configs/smplx_to_g1.json
+# Weights match smplx_to_g1.json ik_match_table2 (GMR's second / refining pass).
+# GMR runs two sequential QP passes; we run one NLP so we use the table2 weights
+# which represent the final refined cost structure.
+#
+# Key differences from a naive guess:
+#   - Arms (shoulder/elbow/wrist): pos_w=10, NOT 100 — arm shape driven by rotation
+#   - Feet: rot_w=50, very strong rotation to nail foot orientation
+#   - Spine: pos_w=0, rotation-only
 _EE_MAP: list[tuple[str, str, float, float]] = [
-    # Feet — strong position tracking (ground contact, stance stability)
-    ("left_foot",      "left_ankle_roll_link",   100.0, 5.0),
-    ("right_foot",     "right_ankle_roll_link",  100.0, 5.0),
-    # Wrists — primary arm EE
-    ("left_wrist",     "left_wrist_yaw_link",    100.0, 10.0),
-    ("right_wrist",    "right_wrist_yaw_link",   100.0, 10.0),
-    # Mid-chain — soft hints to prevent joint-angle flipping
-    ("left_elbow",     "left_elbow_link",          10.0, 5.0),
-    ("right_elbow",    "right_elbow_link",         10.0, 5.0),
-    ("left_hip",       "left_hip_roll_link",       10.0, 5.0),
-    ("right_hip",      "right_hip_roll_link",      10.0, 5.0),
-    ("left_knee",      "left_knee_link",           10.0, 2.0),
-    ("right_knee",     "right_knee_link",          10.0, 2.0),
-    ("spine3",         "torso_link",                5.0, 5.0),
-    ("left_shoulder",  "left_shoulder_yaw_link",   5.0, 5.0),
-    ("right_shoulder", "right_shoulder_yaw_link",  5.0, 5.0),
+    # Feet — strong position + rotation
+    ("left_foot",      "left_ankle_roll_link",   100.0, 50.0),
+    ("right_foot",     "right_ankle_roll_link",  100.0, 50.0),
+    # Wrists
+    ("left_wrist",     "left_wrist_yaw_link",     10.0,  5.0),
+    ("right_wrist",    "right_wrist_yaw_link",    10.0,  5.0),
+    # Elbows
+    ("left_elbow",     "left_elbow_link",         10.0,  5.0),
+    ("right_elbow",    "right_elbow_link",        10.0,  5.0),
+    # Hips
+    ("left_hip",       "left_hip_roll_link",      10.0,  5.0),
+    ("right_hip",      "right_hip_roll_link",     10.0,  5.0),
+    # Knees
+    ("left_knee",      "left_knee_link",          10.0,  5.0),
+    ("right_knee",     "right_knee_link",         10.0,  5.0),
+    # Spine — rotation only
+    ("spine3",         "torso_link",               0.0, 10.0),
+    # Shoulders
+    ("left_shoulder",  "left_shoulder_yaw_link",  10.0,  5.0),
+    ("right_shoulder", "right_shoulder_yaw_link", 10.0,  5.0),
 ]
 
 # 14 finger joints in g1_body29_hand14.urdf — locked to neutral so we get
